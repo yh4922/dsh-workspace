@@ -1,4 +1,4 @@
-﻿/*
+/*
  * @Description: 远程方法的入参 / 出参类型（宿主与浏览器共享，不依赖 zod）
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/wire/dto.ts
@@ -184,6 +184,11 @@ export interface MethodIO {
   updateInstall: [{ source: 'latest' } | { source: 'upload'; token: string }, UpdateStatus]
   /** 开关「接管 DSH 文件侧栏」。 */
   setFilesTakeover: [{ enabled: boolean }, PrefsOutput]
+  /**
+   * 交付卡片（deliverables/presented 事件）里某个文件是否远程工作区文件。
+   * 卡片 ▾ 菜单的请求只带「会话 + 事件序号 + 文件下标」，浏览器据此决定接管还是交还宿主。
+   */
+  presentedFile: [{ sessionId: string; seq: number; index: number }, { remote: { hostId: string; remotePath: string } | null }]
 }
 
 export interface LocalListOutput {

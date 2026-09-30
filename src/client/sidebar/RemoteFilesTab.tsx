@@ -1,11 +1,11 @@
-﻿/*
+/*
  * @Description: 右侧栏「文件管理」标签 —— 当前工作区（远程经 SFTP / 本地直接读写）的文件树，点文件在右侧栏打开；右键菜单（重命名 / 复制 / 粘贴 / 复制路径）
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/client/sidebar/RemoteFilesTab.tsx
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { RemoteEntry } from '../../wire/dto.js'
-import { displayPath, localFileAddress, sessionFileAddress } from './remote-index.js'
+import { displayPath, localFileAddress, revealPlan, sessionFileAddress } from './remote-index.js'
 import { RemoteFileViewer, type SidebarBodyProps } from './RemoteFileTab.js'
 import { Split } from './Split.js'
 import { NOTE_HEIGHT, ROW_HEIGHT, VirtualList } from './VirtualList.js'
@@ -18,6 +18,9 @@ interface DirState {
   entries?: RemoteEntry[]
   error?: string
 }
+
+/** 标签 id → 已处理的「显示文件位置」导航身份（见下方定位 effect）。 */
+const handledReveals = new Map<string, string>()
 
 export function RemoteFilesTab(props: SidebarBodyProps) {
   const { t, api, index, sessionId } = props
@@ -33,13 +36,24 @@ export function RemoteFilesTab(props: SidebarBodyProps) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [showHidden, setShowHidden] = useState(false)
   const [selected, setSelected] = useState<string | null>(null)
+  /** 「显示文件位置」定位到的文件：只高亮并滚动过去，不打开（窄面板里打开会盖住列表）。 */
+  const [focus, setFocus] = useState<{ path: string; nonce: number } | null>(null)
   const wideRef = useRef(false)
+  // 导航参数（交付卡片「显示文件位置」经 sidebarRight.openTab 传入）；会话顶部标签没有 useTabInfo。
+  const tabInfo = props.useTabInfo?.()
+  const params = tabInfo?.tab.navigation?.params as { reveal?: unknown; nonce?: unknown } | undefined
+  const reveal = typeof params?.reveal === 'string' ? params.reveal : undefined
+  // 这次导航的身份：宿主每次 navigate 递增 revision；旧宿主没有时退回 openTab 传入的 nonce。
+  const revealKey = `${tabInfo?.tab.navigation?.revision ?? ''}|${typeof params?.nonce === 'number' ? params.nonce : ''}`
+  const tabId = tabInfo?.tab.id
 
   /**
    * 打开文件：够宽就在本页右侧打开；右侧栏里的窄面板维持原来的「新开一个文件标签」；
    * 会话顶部标签（没有标签信息）窄时也在本页打开（整页覆盖列表，✕ 返回）。
    */
   const openFile = (path: string): void => {
+    // 用户自己点开文件后，定位高亮就不再有意义（否则会同时出现两个高亮行）。
+    setFocus(null)
     // 本地文件交给宿主（或其他插件）的查看器：本插件的文件查看器只认领远程文件。
     if (!wideRef.current && props.useTabInfo !== undefined) props.openResource(workspace?.local === true ? localFileAddress(path) : sessionFileAddress(sessionId, path))
     else setSelected(path)
@@ -62,6 +76,22 @@ export function RemoteFilesTab(props: SidebarBodyProps) {
   useEffect(() => {
     if (root !== undefined) void loadDir(root)
   }, [loadDir, root])
+
+  // 定位：展开从根到文件所在目录的每一级并（重新）加载 —— 文件可能刚由 Agent 创建，旧列表里还没有它。
+  // 宿主把导航参数保留到标签关闭：组件重新挂载（切会话回来、面板重建）时不能再执行一遍，
+  // 所以按「标签 + 导航身份」记下已处理的，记录放在模块级（组件状态会随重新挂载丢失）。
+  useEffect(() => {
+    if (reveal === undefined || root === undefined || tabId === undefined) return
+    if (handledReveals.get(tabId) === revealKey) return
+    const plan = revealPlan(root, reveal)
+    if (plan === undefined) return
+    handledReveals.set(tabId, revealKey)
+    setExpanded((cur) => new Set([...cur, ...plan.dirs]))
+    for (const dir of [root, ...plan.dirs]) void loadDir(dir)
+    // 目标在隐藏目录里时打开「显示隐藏文件」（否则目标行不渲染）；用户随时可以再关掉。
+    if (plan.hidden) setShowHidden(true)
+    setFocus({ path: reveal, nonce: Date.now() })
+  }, [reveal, revealKey, tabId, root, loadDir])
 
   const menu = useRemoteFileMenu({
     t,
@@ -145,7 +175,7 @@ export function RemoteFilesTab(props: SidebarBodyProps) {
         className="dshws-row"
         data-ignored={e.ignored}
         data-hidden={e.hidden}
-        data-selected={selected === e.path}
+        data-selected={selected === e.path || focus?.path === e.path}
         style={{ paddingLeft: 6 + depth * 14 }}
         title={displayPath(e.path)}
         onClick={() => (isDir ? toggle(e.path) : openFile(e.path))}
@@ -186,6 +216,7 @@ export function RemoteFilesTab(props: SidebarBodyProps) {
         itemKey={(r) => (r.kind === 'entry' ? r.entry.path : r.key)}
         itemHeight={(r) => (r.kind === 'entry' ? ROW_HEIGHT : NOTE_HEIGHT)}
         renderItem={renderRow}
+        scrollTo={focus === null ? undefined : { key: focus.path, nonce: focus.nonce }}
         onContextMenu={menu.openForRoot}
         footer={rootEmpty ? <EmptyState text={t('add.emptyDir')} /> : undefined}
       />

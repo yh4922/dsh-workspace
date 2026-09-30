@@ -1,4 +1,4 @@
-﻿/*
+/*
  * @Description: 右侧栏「远程文件」查看器 —— 远程会话里点开的文件经 SFTP 读取，Monaco 编辑，HTML / 图片可预览
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/client/sidebar/RemoteFileTab.tsx
@@ -18,7 +18,7 @@ import { isLight, resolveColor } from '../terminal/theme.js'
 import { FileIcon, IconButton, IconClose, IconRefresh } from './ui.js'
 
 export interface SidebarTabInfo {
-  tab: { id: string; kind: string; title: string; contentId: string; visible?: boolean; navigation?: { params?: unknown } }
+  tab: { id: string; kind: string; title: string; contentId: string; visible?: boolean; navigation?: { params?: unknown; revision?: number } }
 }
 
 export interface SidebarBodyProps {

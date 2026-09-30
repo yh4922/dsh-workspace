@@ -29,6 +29,9 @@ import {
   type RemoteToolEnv,
   type ToolExec
 } from './remote-tools.js'
+import { UPLOAD_TOOL_NAME, uploadToolDefinition, type UploadDeps } from './upload-tool.js'
+import type { AttachmentService } from './upload-source.js'
+import { createRemotePresent, type PresentExec, type TurnBoundarySource } from './present-tool.js'
 
 interface ToolDefinitionLike {
   name: string
@@ -43,7 +46,12 @@ interface ScopedTools {
 }
 
 interface AgentLike {
-  ctx: { inject(deps: string[], callback: (c: { tools: ScopedTools }) => void): { dispose(): unknown } }
+  ctx: {
+    inject(
+      deps: string[],
+      callback: (c: { tools: ScopedTools; on?: (event: string, listener: (...args: never[]) => unknown) => () => void }) => void
+    ): { dispose(): unknown }
+  }
   session: { id?: string; header: { cwd?: string } }
 }
 
@@ -182,6 +190,42 @@ export function mountAgentTools(ctx: Context, deps: AgentToolsDeps): () => void 
           return true
         })
       }
+      // 附件上传：宿主没有附件服务（旧版）或拿不到 defineTool 时不注册，不暴露一个必然失败的工具。
+      step(UPLOAD_TOOL_NAME, () => {
+        if (deps.defineTool === undefined || c.get('attachments') === undefined) return false
+        const uploadDeps: UploadDeps = {
+          attachments: () => c.get('attachments') as AttachmentService | undefined,
+          audit: (level, message) => deps.rt.log[level](binding.hostId, 'agent', message)
+        }
+        tools.register(deps.defineTool(uploadToolDefinition(env, uploadDeps, (exec) => guard(binding, exec))))
+        return true
+      })
+      // present：远程路径在宿主那里按本机文件系统校验必然失败。包装宿主定义（描述、render、卡片不变），
+      // 缺 sessionProjections 或作用域不能挂监听时不接管，宿主原实现照常工作。
+      step('present', () => {
+        const builtin = builtinOf('present')
+        const projections = c.get('sessionProjections') as TurnBoundarySource | undefined
+        if (builtin === undefined || typeof projections?.stateOf !== 'function' || typeof scoped.on !== 'function') return false
+        const present = createRemotePresent({
+          binding,
+          backend: env.backend,
+          projections,
+          builtinExecute: (args, exec) => builtin.execute(args, exec)
+        })
+        // tools/result 按 Agent 作用域分发（ToolRuntime.notifyResult 的 scopeTarget），宿主 present 也在这一层监听；
+        // 挂在本 inject 作用域上，Agent 释放时随 fiber 一并撤下。
+        scoped.on('tools/result', (exec: unknown, result: unknown) => {
+          present.onResult(exec as PresentExec, result as { isError?: boolean } | undefined)
+        })
+        tools.register({
+          ...builtin,
+          execute: async (args: unknown, exec: unknown) => {
+            guard(binding, exec as ToolExec)
+            return await present.execute(args, exec as PresentExec)
+          }
+        })
+        return true
+      })
       deps.rt.log.info(
         binding.hostId,
         'agent',
@@ -229,6 +273,8 @@ export function remotePromptText(binding: RemoteBinding | undefined, hostLabel: 
     `Use POSIX paths: absolute (e.g. ${binding.remotePath.replace(/\/+$/, '')}/src/main.ts) or relative to the workspace root.`,
     `The local directory ${binding.localPath} is only a placeholder that binds this session to the remote host; do not put project files there.`,
     'bash runs `bash -lc` on the remote host in a fresh shell each call (pass workdir instead of cd). run_in_background is unavailable; for long-running processes use `nohup <cmd> > /tmp/<name>.log 2>&1 &` and read the log.',
+    'present accepts remote paths (absolute or relative to the workspace root); the delivery card opens a preview of the remote file in the sidebar. Files on this computer can still be presented, but not mixed with remote files in one call.',
+    'Local files cannot be copied to the remote host by path. To put an image or file from this conversation (pasted by the user or produced by a tool) into the workspace, use upload_to_remote with its attachment id (sha256:…) and a path relative to the workspace root.',
     'Never run `git commit`, `git push`, `git reset --hard`, `git rebase` or other history-changing git commands on the remote host unless the user explicitly asks for that exact action in this conversation; leave changes uncommitted and tell the user.'
   ].join('\n')
 }

@@ -7,6 +7,7 @@
  * 真机测试用 SSH 实现。P2 的 stdio 加速层也只需再实现一遍本接口。
  */
 import type { WorkspaceRuntime } from '../runtime.js'
+import { confinedUpload, type ConfinedUploadInput, type ConfinedUploadResult } from '../sftp/confined-upload.js'
 
 export interface RemoteStat {
   type: 'dir' | 'file' | 'symlink' | 'other'
@@ -38,10 +39,14 @@ export interface RunResult {
 export interface AgentBackend {
   /** 跟随符号链接的 stat；不存在返回 undefined。 */
   stat(path: string): Promise<RemoteStat | undefined>
+  /** 不跟随符号链接的 stat；不存在返回 undefined。 */
+  lstat(path: string): Promise<RemoteStat | undefined>
   readBytes(path: string, maxBytes: number): Promise<Buffer>
   /** 原子写入：父目录不存在则创建；保留权限位；符号链接写到真实目标。 */
   writeText(path: string, content: string): Promise<void>
   run(command: string, options: RunOptions): Promise<RunResult>
+  /** 受限上传：只写到工作区根（真实路径）之内，不跟随目标处的符号链接（见 sftp/confined-upload.ts）。 */
+  upload(input: ConfinedUploadInput): Promise<ConfinedUploadResult>
 }
 
 /** 文件版本：大小 + 修改时间（SFTP 的 mtime 精度为秒，同秒内的外部修改检测不到，是协议限制）。 */
@@ -108,6 +113,10 @@ export class SshAgentBackend implements AgentBackend {
     return this.rt.files.statPath(this.hostId, path)
   }
 
+  lstat(path: string): Promise<RemoteStat | undefined> {
+    return this.rt.files.lstatPath(this.hostId, path)
+  }
+
   readBytes(path: string, maxBytes: number): Promise<Buffer> {
     return this.rt.files.readBytes(this.hostId, path, maxBytes)
   }
@@ -116,6 +125,11 @@ export class SshAgentBackend implements AgentBackend {
     const parent = path.slice(0, path.lastIndexOf('/')) || '/'
     await this.rt.files.mkdirp(this.hostId, parent)
     await this.rt.files.writeText(this.hostId, path, content, undefined)
+  }
+
+  async upload(input: ConfinedUploadInput): Promise<ConfinedUploadResult> {
+    // 走「file」连接池的 SFTP 会话：大文件上传不拖慢终端与 Agent 的命令通道。
+    return await confinedUpload(await this.rt.files.sftp(this.hostId), input)
   }
 
   async run(command: string, options: RunOptions): Promise<RunResult> {

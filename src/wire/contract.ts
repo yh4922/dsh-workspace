@@ -1,4 +1,4 @@
-﻿/*
+/*
  * @Description: 宿主与浏览器共享的 Typert 远程契约（方法名、描述符构造）
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/wire/contract.ts
@@ -62,7 +62,8 @@ export const METHODS = [
   'updateStatus',
   'updateCheck',
   'updateInstall',
-  'setFilesTakeover'
+  'setFilesTakeover',
+  'presentedFile'
 ] as const
 
 /** 经远程调用分段下发的编辑器资源。 */

@@ -1,4 +1,4 @@
-﻿/*
+/*
  * @Description: 向 DSH 原生右侧栏注册远程工作区的三种标签
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/client/sidebar/register.tsx
@@ -21,7 +21,9 @@ import { RemoteFileTab, type SidebarTabInfo } from './RemoteFileTab.js'
 import { RemoteFilesTab } from './RemoteFilesTab.js'
 import { SshTab } from './SshTab.js'
 import { GitTab } from './GitTab.js'
-import { TAKEOVER_FILES_ID, filesTakeover, manageFilesTakeover, onFilesTakeoverToggle, type FilesRegistry } from './files-takeover.js'
+import { installPresentActions } from './present-actions.js'
+import { revealPlan } from './remote-index.js'
+import { FILES_KIND, TAKEOVER_FILES_ID, filesTakeover, manageFilesTakeover, onFilesTakeoverToggle, type FilesRegistry } from './files-takeover.js'
 
 interface TabRegistry {
   register(definition: {
@@ -40,6 +42,8 @@ interface TabRegistry {
 
 interface SidebarRight {
   openResource?(address: string, options?: { revealIfOpened?: boolean }): void
+  /** 按类型打开页面标签（宿主 sidebarRight.openTab），params 进入该标签的导航参数。 */
+  openTab?(kind: string, options?: { params?: unknown; revealIfOpened?: boolean }): void
 }
 
 const FILE_ID = 'dsh-workspace:remote-file'
@@ -101,6 +105,35 @@ export function registerRemoteSidebar(ctx: ClientContext, t: Translate, api: Wor
     right?.openResource?.(address, { revealIfOpened: true })
   }
   const inject = (sessionId: string) => ({ t, api, index, openResource, sessionId })
+
+  // 交付卡片 ▾ 菜单：远程文件的「打开」→ 侧栏预览，「显示文件位置」→ 在「文件管理」里定位。
+  let offPresent: () => void = () => undefined
+  try {
+    offPresent = installPresentActions({
+      index,
+      api,
+      openResource,
+      previewLabel: () => t('side.presentPreview'),
+      canReveal: (sessionId, remotePath) => {
+        const ws = index.bySession(sessionId)
+        if (ws === undefined || revealPlan(ws.remotePath, remotePath) === undefined) return false
+        // openTab 作用于当前显示的会话：卡片可能在子代理等其他会话的视图里，要求是同一个远程工作区。
+        const current = (ctx.get('uiSession') as { adapter?: { current?: CurrentSession } } | undefined)?.adapter?.current?.getSnapshot()?.key
+        if (current === undefined) return true
+        const shown = index.bySession(current)
+        return shown !== undefined && shown.hostId === ws.hostId && shown.remotePath === ws.remotePath
+      },
+      revealInFiles: (_sessionId, remotePath) => {
+        // 接管了 DSH「文件」侧栏时打开接管的那个标签，避免同时出现两个文件树。
+        const kind = filesTakeover.status().state === 'active' ? FILES_KIND : FILES_ID
+        const right = ctx.get('sidebarRight') as SidebarRight | undefined
+        // 定位是否已处理按宿主导航的 revision 判断（见 RemoteFilesTab）；nonce 供没有 revision 的旧宿主兜底。
+        right?.openTab?.(kind, { params: { reveal: remotePath, nonce: Date.now() }, revealIfOpened: true })
+      }
+    })
+  } catch (error) {
+    log('接管交付卡片菜单失败', error)
+  }
 
   const seat = c.inject(['sidebarRightTabs'], (sub) => {
     watchSessions()
@@ -238,6 +271,7 @@ export function registerRemoteSidebar(ctx: ClientContext, t: Translate, api: Wor
   }
 
   return () => {
+    offPresent()
     offConversation()
     if (timer !== undefined) clearTimeout(timer)
     offSessions?.()

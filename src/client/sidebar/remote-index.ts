@@ -1,4 +1,4 @@
-﻿/*
+/*
  * @Description: 侧边栏用的「远程会话」判定 —— 远程工作区列表缓存、文件地址解析、路径映射
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/client/sidebar/remote-index.ts
@@ -92,6 +92,24 @@ export function toRemotePath(ws: RemoteWorkspaceView, input: string): string | u
   if (/^[A-Za-z]:\//.test(p) || p.startsWith('//')) return undefined
   if (p.startsWith('/')) return normalizePosix(p)
   return normalizePosix(`${ws.remotePath}/${p}`)
+}
+
+/**
+ * 「显示文件位置」的定位计划：从根到文件所在目录要展开的每一级；路径中有点开头的段时需要显示隐藏文件。
+ * 不在根下返回 undefined（不是这个工作区的文件，不定位）。
+ */
+export function revealPlan(root: string, target: string): { dirs: string[]; hidden: boolean } | undefined {
+  const base = root.length > 1 ? root.replace(/\/+$/, '') : root
+  if (target === base || !target.startsWith(base === '/' ? '/' : `${base}/`)) return undefined
+  const segments = target.slice(base === '/' ? 1 : base.length + 1).split('/').filter(Boolean)
+  if (segments.length === 0) return undefined
+  const dirs: string[] = []
+  let cur = base
+  for (const seg of segments.slice(0, -1)) {
+    cur = cur === '/' ? `/${seg}` : `${cur}/${seg}`
+    dirs.push(cur)
+  }
+  return { dirs, hidden: segments.some((s) => s.startsWith('.')) }
 }
 
 /** 本地会话在线上的「主机 id」前缀（与宿主 local/local-fs.ts 的 LOCAL_ID_PREFIX 一致）。 */

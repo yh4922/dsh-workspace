@@ -60,9 +60,18 @@ export interface AgentToolsDeps {
   defineTool?: (definition: unknown) => unknown
 }
 
-/** 从内置 read 的参数说明里取默认行数（render 依赖它，两边必须一致）。 */
+/**
+ * 从内置 read 的参数说明里取默认行数（render 依赖它，两边必须一致）。
+ *
+ * 不能对整个 parameters 取「第一个 Defaults to N.」：内置 read 的 offset 说明是
+ * 「1-based first line to return. Defaults to 1.」，且 offset 排在 limit 之前，
+ * 于是抓到的是 1 —— 远程 read 每次只返回一行，且 limit 参数一律被拒
+ * （limit must be less than or equal to 1）。这里先把范围收缩到 limit 属性本身。
+ */
 export function readLimitOf(builtin: ToolDefinitionLike | undefined): number {
-  const match = /Defaults to (\d+)\./.exec(JSON.stringify(builtin?.parameters ?? {}))
+  const text = JSON.stringify(builtin?.parameters ?? {})
+  const scoped = /"limit"\s*:\s*\{/.exec(text)
+  const match = /Defaults to (\d+)\./.exec(scoped === null ? text : text.slice(scoped.index))
   const n = match === null ? NaN : Number(match[1])
   return Number.isInteger(n) && n > 0 ? n : 2000
 }

@@ -72,7 +72,7 @@ async function setup(options: { withBash: boolean; layout?: 'preset' | 'global' 
       description: 'Read a UTF-8 text file and return line-numbered content.',
       parameters: {
         file_path: { type: 'string', required: true, description: 'Path to read.' },
-        offset: { type: 'number', description: '1-based first line.' },
+        offset: { type: 'number', description: '1-based first line to return. Defaults to 1.' },
         limit: { type: 'number', description: 'Maximum number of lines to return. Defaults to 2000.' }
       },
       output: {
@@ -255,6 +255,33 @@ describe('远程工具注册（真实 ToolRuntime + 真实先读后写策略）'
   it('readLimitOf / 提示词只对远程会话生效', () => {
     expect(readLimitOf({ name: 'read', execute: async () => 0, parameters: { limit: { description: 'Defaults to 1500.' } } })).toBe(1500)
     expect(readLimitOf(undefined)).toBe(2000)
+    // 内置 read 的 offset 说明里也有「Defaults to 1.」且排在 limit 之前：
+    // 必须只认 limit 自己的默认值，否则远程 read 每次只返回一行。
+    expect(
+      readLimitOf({
+        name: 'read',
+        execute: async () => 0,
+        parameters: {
+          file_path: { description: 'Path to read.' },
+          offset: { description: '1-based first line to return. Defaults to 1.' },
+          limit: { description: 'Maximum number of lines to return. Defaults to 2000.' }
+        }
+      })
+    ).toBe(2000)
+    // 参数以 JSON Schema 形状给出（properties 包裹）时同样成立。
+    expect(
+      readLimitOf({
+        name: 'read',
+        execute: async () => 0,
+        parameters: {
+          type: 'object',
+          properties: {
+            offset: { type: 'number', description: '1-based first line to return. Defaults to 1.' },
+            limit: { type: 'number', description: 'Maximum number of lines to return. Defaults to 2000.' }
+          }
+        }
+      })
+    ).toBe(2000)
     expect(remotePromptText(undefined, 'x')).toBe('')
     expect(remotePromptText({ localPath: 'C:\\ph', hostId: 'h', remotePath: '/srv/app', title: 't', createdAt: '' }, 'box (u@h:22)')).toContain(
       'remote SSH workspace on box (u@h:22), rooted at /srv/app'

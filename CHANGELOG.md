@@ -1,8 +1,10 @@
-﻿# 更新日志
+# 更新日志
 
 本文件记录 dsh-workspace 各版本的主要变化。开发中的改动先写在「未发布」下，发布时（`npm run release`）自动定稿为对应版本。
 
 ## 未发布
+
+- 修复：远程会话的 `read` 每次只返回一行（并且 `limit` 一律被拒，报 `limit must be less than or equal to 1`）。`readLimitOf` 原先对整个 `parameters` 取「第一个 `Defaults to N.`」，而内置 `read` 的 `offset` 说明是「1-based first line to return. Defaults to 1.」且排在 `limit` 之前，于是把行数上限读成了 1，比真实值 2000 小三个数量级。现在先把范围收缩到 `limit` 属性本身再取默认值；测试替身里 `offset` 的说明也补成与内置工具一致，避免这个形状再次漏测。
 
 ## 0.11.1（2026-09-30）
 

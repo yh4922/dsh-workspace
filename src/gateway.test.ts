@@ -1,4 +1,4 @@
-﻿/*
+/*
  * @Description: 网关（浏览器可调用的全部远程方法）与 Typert 清单的测试
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/gateway.test.ts
@@ -486,6 +486,46 @@ describe('添加工作区（createRemoteWorkspace / setTakeover）', () => {
     expect(url).toMatch(/^\/dsh-workspace\/preview\/[A-Za-z0-9_-]+\/srv\/app\/web\/index\.html$/)
     await expectCode(gw.previewUrl({ hostId: saved.id, path: '/etc/passwd' }), ERROR_CODES.failed)
     await expectCode(gw.previewUrl({ hostId: saved.id, path: '/srv/application/x' }), ERROR_CODES.failed)
+  })
+
+  it('presentedFile：交付卡片里的远程文件 → 远程路径；本机文件 / 非远程会话 / 无效事件 → null', async () => {
+    const saved = await gw.saveHost(host({ auth: { kind: 'agent' } }))
+    rt.files.statPath = async () => ({ type: 'dir', size: 0, mtimeMs: 0 })
+    const ws = await gw.createRemoteWorkspace({ hostId: saved.id, remotePath: '/srv/app', title: 'app' })
+    const events: Record<number, { target: { type: string; data: unknown }; session: { cwd?: string } }> = {
+      5: { target: { type: 'deliverables/presented', data: { turn: 1, callId: 'c', files: [{ path: '/srv/app/a.png' }, { path: 'C:\\pic\\b.png' }, { path: 'docs/c.md' }] } }, session: { cwd: ws.localPath } },
+      6: { target: { type: 'deliverables/presented', data: { turn: 1, callId: 'c', files: [{ path: '/srv/app/a.png' }] } }, session: { cwd: sandbox } },
+      7: { target: { type: 'tool/result', data: {} }, session: { cwd: ws.localPath } },
+      // 工作区根以外：带远程标记的是远程文件；没有标记的（macOS / Linux 上交还宿主的本机文件）不是。
+      9: {
+        target: { type: 'deliverables/presented', data: { turn: 2, callId: 'c', files: [{ path: '/tmp/report.md', remoteHost: saved.id }, { path: '/Users/me/pic.png' }] } },
+        session: { cwd: ws.localPath }
+      },
+      // 与宿主 isPresentedData 一致：turn 无效的事件不认。
+      10: { target: { type: 'deliverables/presented', data: { turn: 0, callId: 'c', files: [{ path: '/srv/app/a.png' }] } }, session: { cwd: ws.localPath } }
+    }
+    const ctx = new Context()
+    ctx.provide('sessionQuery')
+    ctx.set('sessionQuery', {
+      readEvent: async (q: { sessionId: string; seq: number }) => {
+        const hit = events[q.seq]
+        if (hit === undefined) throw Object.assign(new Error('missing'), { code: 'SESSION_QUERY_EVENT_NOT_FOUND' })
+        return hit
+      }
+    })
+    const g = new WorkspaceGateway(ctx, rt)
+    expect(await g.presentedFile({ sessionId: 's', seq: 5, index: 0 })).toEqual({ remote: { hostId: saved.id, remotePath: '/srv/app/a.png' } })
+    expect(await g.presentedFile({ sessionId: 's', seq: 5, index: 1 })).toEqual({ remote: null })
+    expect(await g.presentedFile({ sessionId: 's', seq: 5, index: 2 })).toEqual({ remote: { hostId: saved.id, remotePath: '/srv/app/docs/c.md' } })
+    expect(await g.presentedFile({ sessionId: 's', seq: 5, index: 9 })).toEqual({ remote: null })
+    expect(await g.presentedFile({ sessionId: 's', seq: 6, index: 0 })).toEqual({ remote: null })
+    expect(await g.presentedFile({ sessionId: 's', seq: 7, index: 0 })).toEqual({ remote: null })
+    expect(await g.presentedFile({ sessionId: 's', seq: 9, index: 0 })).toEqual({ remote: { hostId: saved.id, remotePath: '/tmp/report.md' } })
+    expect(await g.presentedFile({ sessionId: 's', seq: 9, index: 1 })).toEqual({ remote: null })
+    expect(await g.presentedFile({ sessionId: 's', seq: 10, index: 0 })).toEqual({ remote: null })
+    await expectCode(g.presentedFile({ sessionId: 's', seq: 8, index: 0 }), ERROR_CODES.failed)
+    // 宿主没有 sessionQuery（旧版）：返回 null，浏览器交还宿主处理。
+    expect(await gw.presentedFile({ sessionId: 's', seq: 5, index: 0 })).toEqual({ remote: null })
   })
 
   it('接管开关：默认开启，关闭后持久化（重建运行时仍为关闭）', async () => {

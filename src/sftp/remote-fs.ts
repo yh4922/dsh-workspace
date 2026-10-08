@@ -447,6 +447,18 @@ export class RemoteFs {
     }
   }
 
+  /** lstat（不跟随符号链接）；不存在返回 undefined，其他错误照常抛出。 */
+  async lstatPath(hostId: string, file: string): Promise<{ type: EntryType; size: number; mtimeMs: number } | undefined> {
+    const sftp = await this.sftp(hostId)
+    try {
+      const attrs = await call<SftpAttrs>((cb) => sftp.lstat(normalizeRemotePath(file), cb))
+      return { type: typeOfMode(attrs.mode), size: attrs.size, mtimeMs: attrs.mtime * 1000 }
+    } catch (error) {
+      if (isNotFound(error)) return undefined
+      throw error
+    }
+  }
+
   /** 读取整个文件的字节；超过 maxBytes 直接拒绝（不静默截断 —— 截断后再写回会丢内容）。 */
   async readBytes(hostId: string, file: string, maxBytes: number): Promise<Buffer> {
     const target = normalizeRemotePath(file)
@@ -731,6 +743,17 @@ async function freeCopyName(sftp: SftpLike, dir: string, name: string, isDir: bo
 }
 
 /**
+ * posix-rename 失败是否因为「服务端不支持该扩展」：ssh2 在服务端未声明扩展时同步抛出
+ * 「Server does not support this extended request」（无状态码），服务端拒绝时回 OP_UNSUPPORTED（8）。
+ * 只有这两种情况才能退化为「删旧 + 改名」；权限不足等真实失败若也退化，删旧成功、改名失败会丢掉原文件。
+ */
+export function isRenameUnsupported(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code
+  if (code === 8) return true
+  return code === undefined && /does not support/i.test(error instanceof Error ? error.message : String(error))
+}
+
+/**
  * 用临时文件替换已存在的目标。优先 OpenSSH 的 posix-rename（原子覆盖）；
  * 服务端不支持时退化为「删旧 + 改名」，两步之间有极短的目标缺失窗口。
  */
@@ -740,8 +763,8 @@ async function replace(sftp: SftpLike, tmp: string, target: string): Promise<voi
     try {
       await call((cb) => posixRename(tmp, target, cb))
       return
-    } catch {
-      /* 服务端未启用扩展，走退化路径 */
+    } catch (error) {
+      if (!isRenameUnsupported(error)) throw error
     }
   }
   await call((cb) => sftp.unlink(target, cb))

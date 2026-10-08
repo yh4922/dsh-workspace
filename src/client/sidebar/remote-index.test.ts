@@ -1,10 +1,29 @@
-﻿/*
+/*
  * @Description: 右侧栏远程会话判定测试 —— 地址解析、路径映射、按会话查远程工作区
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/client/sidebar/remote-index.test.ts
  */
 import { describe, expect, it } from 'vitest'
-import { RemoteIndex, displayPath, localFileAddress, normalizePosix, parseFileAddress, sessionFileAddress, toLocalPosix, toRemotePath } from './remote-index.js'
+import { RemoteIndex, displayPath, localFileAddress, normalizePosix, parseFileAddress, revealPlan, sessionFileAddress, toLocalPosix, toRemotePath } from './remote-index.js'
+import { centeredScrollTop } from './VirtualList.js'
+
+describe('显示文件位置：定位计划与滚动', () => {
+  it('展开从根到父目录的每一级；点开头的段需要显示隐藏文件；根外 / 根本身不定位', () => {
+    expect(revealPlan('/srv/app', '/srv/app/public/img/a.png')).toEqual({ dirs: ['/srv/app/public', '/srv/app/public/img'], hidden: false })
+    expect(revealPlan('/srv/app/', '/srv/app/a.png')).toEqual({ dirs: [], hidden: false })
+    expect(revealPlan('/srv/app', '/srv/app/.github/wf.yml')).toEqual({ dirs: ['/srv/app/.github'], hidden: true })
+    expect(revealPlan('/', '/etc/hosts')).toEqual({ dirs: ['/etc'], hidden: false })
+    expect(revealPlan('/srv/app', '/srv/apple/a')).toBeUndefined()
+    expect(revealPlan('/srv/app', '/srv/app')).toBeUndefined()
+  })
+
+  it('目标行居中，靠顶部时不出现负值', () => {
+    const offsets = [0, 26, 52, 78, 104, 130]
+    expect(centeredScrollTop(offsets, 4, 52, 0)).toBe(91)
+    expect(centeredScrollTop(offsets, 0, 520, 0)).toBe(0)
+    expect(centeredScrollTop(offsets, 4, 52, 40)).toBe(131)
+  })
+})
 
 const ws = {
   localPath: 'C:\\Users\\yangheng\\.dsh\\workspaces\\remote\\192.168.3.112-ps-22\\测试DSH远程',
@@ -67,6 +86,14 @@ describe('RemoteIndex', () => {
     expect(index.resolveAddress(sessionFileAddress('local', '/home/ps/testdsh/app.js'))).toBeUndefined()
     expect(index.resolveAddress(sessionFileAddress('unknown', 'a.txt'))).toBeUndefined()
     expect(index.bySession('remote')?.title).toBe('测试DSH远程')
+  })
+
+  it('远程会话里交付的本机文件（盘符路径）不认领，交回宿主预览', async () => {
+    const index = indexWith({ remote: { cwd: ws.localPath } })
+    await index.refresh()
+    // 宿主 fileAddressFor 对本机盘符路径生成的就是这种地址。
+    expect(index.resolveAddress('dsh-resource://file/session/remote/C:/DshChat/pic/a.png')).toBeUndefined()
+    expect(index.resolveAddress(sessionFileAddress('remote', '/home/ps/testdsh/public/a.png'))?.remotePath).toBe('/home/ps/testdsh/public/a.png')
   })
 
   it('列表内容没变时不通知、沿用旧对象（否则远程 Git 面板会反复整页重载并关掉预览）', async () => {

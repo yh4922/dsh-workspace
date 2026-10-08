@@ -1,4 +1,4 @@
-﻿/*
+/*
  * @Description: 虚拟滚动列表 —— 只渲染可见区域的行（文件树、Git 改动列表共用）
  * @Author: YangHeng
  * @Date: 2026-09-30 14:30:00
@@ -27,6 +27,18 @@ export interface VirtualListProps<T> {
   onContextMenu?(e: ReactMouseEvent<HTMLDivElement>): void
   /** 可见区上下额外渲染的像素。 */
   overscanPx?: number
+  /**
+   * 滚动到某一行（按 itemKey）并居中。每个 nonce 只滚一次；目标行还没出现（目录尚在加载）时，
+   * 等它出现后再滚。
+   */
+  scrollTo?: { key: string; nonce: number }
+}
+
+/** 纯函数：让第 index 行居中的 scrollTop（不小于 0）。 */
+export function centeredScrollTop(offsets: readonly number[], index: number, viewport: number, headerHeight: number): number {
+  const top = headerHeight + (offsets[index] as number)
+  const height = (offsets[index + 1] as number) - (offsets[index] as number)
+  return Math.max(0, Math.round(top - (viewport - height) / 2))
 }
 
 /** 纯函数：前缀和里第一个「结束位置 > y」的下标（二分）。 */
@@ -97,6 +109,21 @@ export function VirtualList<T>(props: VirtualListProps<T>) {
     if (el !== null && el.scrollTop !== scrollTop) setScrollTop(el.scrollTop)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.items])
+
+  const scrolledNonce = useRef<number | undefined>(undefined)
+  useLayoutEffect(() => {
+    const target = props.scrollTo
+    const el = scrollRef.current
+    if (target === undefined || el === null || scrolledNonce.current === target.nonce) return
+    const index = props.items.findIndex((item, i) => props.itemKey(item, i) === target.key)
+    if (index < 0) return
+    scrolledNonce.current = target.nonce
+    // 直接读实际高度：viewport 状态在首次提交前还是默认值 600，矮面板会居中偏移。
+    const next = centeredScrollTop(offsets, index, el.clientHeight || viewport, headerRef.current?.offsetHeight ?? headerHeight)
+    el.scrollTop = next
+    setScrollTop(el.scrollTop)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.scrollTo?.key, props.scrollTo?.nonce, offsets, viewport, headerHeight])
 
   const total = offsets[offsets.length - 1] as number
   const listTop = scrollTop - headerHeight

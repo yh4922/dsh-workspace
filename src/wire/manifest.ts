@@ -1,4 +1,4 @@
-﻿/*
+/*
  * @Description: 宿主端 Typert 清单 —— 输入用 zod 严格校验，输出直通
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/wire/manifest.ts
@@ -150,7 +150,8 @@ const INPUTS: Record<MethodName, z.ZodType> = {
     z.object({ source: z.literal('latest') }),
     z.object({ source: z.literal('upload'), token: z.string().uuid() })
   ]),
-  setFilesTakeover: z.object({ enabled: z.boolean() })
+  setFilesTakeover: z.object({ enabled: z.boolean() }),
+  presentedFile: z.object({ sessionId: z.string().min(1).max(256), seq: z.number().int().nonnegative(), index: z.number().int().min(0).max(1000) })
 }
 
 /** 远程 Git 各操作的输入校验（路径是否在仓库内由 RemoteGit 再校验一次）。 */

@@ -1,4 +1,4 @@
-﻿/*
+/*
  * @Description: Typert 远程网关 —— 浏览器调用宿主的唯一入口
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/gateway.ts
@@ -27,6 +27,8 @@ import { fromLocalPosix, isLocalId, toLocalPosix } from './local/local-fs.js'
 import { LocalGit } from './local/local-git.js'
 import type { GitRepo } from './git/remote-git.js'
 import type { RemoteFs } from './sftp/remote-fs.js'
+import { toRemotePath } from './workspace/bindings.js'
+import { REMOTE_MARKER } from './agent/present-tool.js'
 
 /** 远程（RemoteFs）与本地（LocalFs）共同的文件操作面。 */
 type FileOps = Pick<
@@ -782,6 +784,43 @@ export class WorkspaceGateway extends RemoteService {
       } catch (error) {
         throw localRemote(error)
       }
+    })
+  }
+
+  /**
+   * 交付卡片里的文件 → 远程路径（不是远程工作区文件返回 null，浏览器交还宿主处理）。
+   * 读事件与宿主 /api/present.open 同一个入口（sessionQuery.readEvent），校验规则同宿主 isPresentedData / isPresentedFile；
+   * 路径换算与远程 present（agent/present-tool.ts）一致：toRemotePath 抛错 = 本机文件。
+   */
+  presentedFile(input: In<'presentedFile'>): Out<'presentedFile'> {
+    return this.guard(async () => {
+      const query = this.ctx.get('sessionQuery') as
+        | { readEvent(q: { sessionId: string; seq: number; before: number; after: number }, signal: AbortSignal): Promise<unknown> }
+        | undefined
+      if (query === undefined) return { remote: null }
+      const read = (await query.readEvent({ sessionId: input.sessionId, seq: input.seq, before: 0, after: 0 }, AbortSignal.timeout(10_000))) as
+        | { target?: { type?: unknown; data?: unknown }; session?: { cwd?: unknown } }
+        | undefined
+      const data = read?.target?.type === 'deliverables/presented' ? (read.target.data as { turn?: unknown; callId?: unknown; files?: unknown }) : undefined
+      // 与宿主 isPresentedData 同样的校验。
+      const validTurn = typeof data?.turn === 'number' && Number.isSafeInteger(data.turn) && data.turn >= 1
+      if (data === undefined || !validTurn || typeof data.callId !== 'string' || data.callId === '' || !Array.isArray(data.files)) return { remote: null }
+      const file = data.files[input.index] as ({ path?: unknown } & Record<string, unknown>) | undefined
+      if (typeof file?.path !== 'string' || file.path.trim() === '') return { remote: null }
+      const binding = this.rt.bindings.resolve(typeof read?.session?.cwd === 'string' ? read.session.cwd : undefined)
+      if (binding === undefined) return { remote: null }
+      let remotePath: string
+      try {
+        remotePath = toRemotePath(binding, file.path)
+      } catch {
+        return { remote: null }
+      }
+      // 远程 present 写入的事件带远程标记：以它为准（与分类时的结论一致，含工作区根以外的远程路径）。
+      if (file[REMOTE_MARKER] === binding.hostId) return { remote: { hostId: binding.hostId, remotePath } }
+      // 没有标记（宿主原实现写的、或旧版本写的）：只有落在远程工作区根内才当远程文件 ——
+      // macOS / Linux 宿主上交还宿主的本机文件（/Users/me/a.png）也以 / 开头，不能据此误判。
+      if (insideRoot(binding.remotePath, remotePath)) return { remote: { hostId: binding.hostId, remotePath } }
+      return { remote: null }
     })
   }
 

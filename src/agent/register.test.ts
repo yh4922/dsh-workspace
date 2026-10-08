@@ -570,9 +570,29 @@ describe('远程工具注册（真实 ToolRuntime + 真实先读后写策略）'
           type: 'object',
           properties: {
             offset: { type: 'number', description: '1-based first line to return. Defaults to 1.' },
-            limit: { type: 'number', description: 'Maximum number of lines to return. Defaults to 2000.' }
+            limit: { type: 'number', description: 'Maximum number of lines to return. Defaults to 1800.' }
           }
         }
+      })
+    ).toBe(1800)
+    // limit 说明里没写默认值时用 2000，不能越过 limit 去抓后面属性的数字。
+    expect(
+      readLimitOf({
+        name: 'read',
+        execute: async () => 0,
+        parameters: {
+          offset: { description: '1-based first line to return. Defaults to 1.' },
+          limit: { description: 'Maximum number of lines to return.' },
+          max_chars: { description: 'Defaults to 5.' }
+        }
+      })
+    ).toBe(2000)
+    // 没有 limit 属性时用 2000，不能回退到整段文本又抓到 offset 的 1。
+    expect(
+      readLimitOf({
+        name: 'read',
+        execute: async () => 0,
+        parameters: { offset: { description: '1-based first line to return. Defaults to 1.' } }
       })
     ).toBe(2000)
     expect(remotePromptText(undefined, 'x')).toBe('')

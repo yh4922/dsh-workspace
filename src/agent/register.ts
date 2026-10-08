@@ -68,9 +68,21 @@ export interface AgentToolsDeps {
   defineTool?: (definition: unknown) => unknown
 }
 
-/** 从内置 read 的参数说明里取默认行数（render 依赖它，两边必须一致）。 */
+/**
+ * 从内置 read 的参数说明里取默认行数（render 依赖它，两边必须一致）。
+ *
+ * 不能对整个 parameters 取「第一个 Defaults to N.」：内置 read 的 offset 说明是
+ * 「1-based first line to return. Defaults to 1.」，且 offset 排在 limit 之前，
+ * 于是抓到的是 1 —— 远程 read 每次只返回一行，且 limit 参数一律被拒
+ * （limit must be less than or equal to 1）。所以只读 limit 属性自己的说明；
+ * 取不到（没有 limit，或说明里没写默认值）就用 2000，绝不回退到整段文本，
+ * 否则又会抓到别的属性的数字。
+ */
 export function readLimitOf(builtin: ToolDefinitionLike | undefined): number {
-  const match = /Defaults to (\d+)\./.exec(JSON.stringify(builtin?.parameters ?? {}))
+  const params = (builtin?.parameters ?? {}) as { limit?: { description?: unknown }; properties?: { limit?: { description?: unknown } } }
+  // 兼容扁平形状（dsh-tool-fs 当前写法）与 JSON Schema 的 properties 包裹
+  const limit = params.properties?.limit ?? params.limit
+  const match = /Defaults to (\d+)\./.exec(String(limit?.description ?? ''))
   const n = match === null ? NaN : Number(match[1])
   return Number.isInteger(n) && n > 0 ? n : 2000
 }

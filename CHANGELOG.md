@@ -4,6 +4,8 @@
 
 ## 未发布
 
+- 修复：远程会话的 `read` 每次只返回一行，传 `limit` 也会报 `limit must be less than or equal to 1`。原因是取默认行数时误读了 `offset` 说明里的 `Defaults to 1.`；现在只读 `limit` 自己的默认值，读不到就用 2000。（#3，感谢 @slj1935024637）
+
 ## 0.12.0（2026-09-30）
 
 - 新增：远程会话的 Agent 工具 `upload_to_remote`，把对话里的图片 / 文件（用户粘贴的，或 `generate_image`、`read_image` 等工具产生的）上传到远程工作区。只在远程会话注册，本地会话的工具清单不变。

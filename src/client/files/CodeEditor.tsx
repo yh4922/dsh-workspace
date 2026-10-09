@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from 'react'
 import type * as MonacoApi from 'monaco-editor'
 import type { Translate } from '../context.js'
 import { isLight, onHostThemeChange, resolveColor } from '../terminal/theme.js'
+import { useEditorPref } from '../editor-prefs.js'
 import { checkMonacoLayout, ensureMonacoCss, languageFor, languageOptions, loadMonaco, type AssetFetcher, type Monaco } from './monaco-loader.js'
 
 export interface CodeEditorProps {
@@ -67,6 +68,13 @@ export function CodeEditor(props: CodeEditorProps) {
   /** 手动切换语言：只改高亮方式，不动文件内容。 */
   const switchLanguage = useRef<(id: string) => void>(() => undefined)
   const editorRef = useRef<MonacoApi.editor.IStandaloneCodeEditor | undefined>(undefined)
+  const [minimap, setMinimap] = useEditorPref('minimap')
+  const minimapRef = useRef(minimap)
+  minimapRef.current = minimap
+
+  useEffect(() => {
+    editorRef.current?.updateOptions({ minimap: { enabled: minimap } })
+  }, [minimap])
 
   // 只读状态可在编辑器创建后变化（编辑器只建一次）：同步到 Monaco。
   useEffect(() => {
@@ -122,7 +130,8 @@ export function CodeEditor(props: CodeEditorProps) {
           automaticLayout: true,
           fontSize: 13,
           fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace',
-          minimap: { enabled: props.content.length > 20_000 },
+          // Monaco 异步加载期间开关可能被切换：读最新值。
+          minimap: { enabled: minimapRef.current },
           scrollBeyondLastLine: false,
           renderWhitespace: 'selection',
           tabSize: 2,
@@ -189,6 +198,16 @@ export function CodeEditor(props: CodeEditorProps) {
               </option>
             ))}
           </select>
+          <button
+            type="button"
+            className="dshws-code-toggle"
+            data-active={minimap}
+            aria-pressed={minimap}
+            title={t('editor.minimapHint')}
+            onClick={() => setMinimap(!minimap)}
+          >
+            {t('editor.minimap')}
+          </button>
           {props.readOnly ? <span>{t('editor.readOnly')}</span> : <span>{t('editor.saveHint')}</span>}
         </div>
       ) : null}

@@ -1,4 +1,4 @@
-﻿/*
+/*
  * @Description: 右侧栏「Git 仓库」（远程工作区经 SSH、本地工作区直接执行 git）—— 改动（暂存 / 提交 / 丢弃 / diff）、查看其他分支（只读）、提交历史分叉图
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/client/sidebar/GitTab.tsx
@@ -18,6 +18,7 @@ import type { BranchInfo, DiffSides, DiffTarget } from '../../git/remote-git.js'
 import { graphWidth, layoutGraph, type GraphRow } from '../../git/graph.js'
 import type { GitOp } from '../../wire/dto.js'
 import { CodeEditor } from '../files/CodeEditor.js'
+import { useEditorPref } from '../editor-prefs.js'
 import { isLight, resolveColor } from '../terminal/theme.js'
 import { DiffView } from './DiffView.js'
 import { markdownDocument } from './markdown.js'
@@ -89,6 +90,7 @@ export function GitTab(props: SidebarBodyProps) {
   /** 右侧打开的真实文件（远程绝对路径）：diff 里点「查看源文件」时用。与 diff / 分支文件互斥。 */
   const [source, setSource] = useState<string | null>(null)
   const [sideBySide, setSideBySide] = useState(() => localStorage.getItem('dshws.git.sbs') !== '0')
+  const [collapseUnchanged, setCollapseUnchanged] = useEditorPref('diffCollapse')
 
   /**
    * 刷新 git status。结果与上次相同则不更新状态（轮询时列表不闪、不重渲染）；
@@ -447,6 +449,16 @@ export function GitTab(props: SidebarBodyProps) {
               {t('git.inline')}
             </button>
           </span>
+          <button
+            type="button"
+            className="dshws-side-toggle"
+            data-active={!collapseUnchanged}
+            aria-pressed={!collapseUnchanged}
+            title={collapseUnchanged ? t('git.expandAllHint') : t('git.collapseHint')}
+            onClick={() => setCollapseUnchanged(!collapseUnchanged)}
+          >
+            {t('git.expandAll')}
+          </button>
         </div>
         {diff.error !== undefined ? (
           <div className="dshws-tree-note" data-tone="error">{diff.error}</div>
@@ -464,6 +476,7 @@ export function GitTab(props: SidebarBodyProps) {
             original={diff.sides.original}
             modified={diff.sides.modified}
             sideBySide={sideBySide}
+            collapseUnchanged={collapseUnchanged}
             fetchAsset={(name, i) => api.call('editorAsset', { name, index: i })}
           />
         )}

@@ -100,6 +100,13 @@ export const CSS = `
 .dshws-side-seg { display: inline-flex; border: 1px solid var(--dsw-alias-border-l3); border-radius: 6px; overflow: hidden; }
 .dshws-side-seg button { border: 0; background: transparent; padding: 2px 8px; font-size: 12px; cursor: pointer; color: var(--dsw-alias-label-secondary); }
 .dshws-side-seg button[data-active="true"] { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+/* 单个开关按钮（展开全部 / 缩略图）：外观与分段按钮一致，按下态高亮 */
+.dshws-side-toggle, .dshws-code-toggle {
+  flex-shrink: 0; border: 1px solid var(--dsw-alias-border-l3); border-radius: 6px; background: transparent;
+  padding: 2px 8px; font-size: 12px; cursor: pointer; color: var(--dsw-alias-label-secondary); white-space: nowrap;
+}
+.dshws-side-toggle[data-active="true"], .dshws-code-toggle[data-active="true"] { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+.dshws-code-toggle { padding: 0 6px; font-size: 11px; border-radius: 4px; }
 .dshws-side-banner { display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: 12px; color: var(--dsw-alias-state-warn-primary); }
 .dshws-side-frame { flex: 1 1 auto; min-height: 0; width: 100%; border: 0; background: #fff; }
 .dshws-side-image { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; align-items: flex-start; justify-content: center; padding: 12px; }

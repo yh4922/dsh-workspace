@@ -10,7 +10,7 @@ import { RemoteError, RemoteService, remoteErrorOf } from './wire/remote.js'
 import type { WorkspaceRuntime } from './runtime.js'
 import type { GroupRecord, HostAuth, HostProxy, HostRecord } from './types.js'
 import { ERROR_CODES, SERVICE } from './wire/contract.js'
-import type { AuthInput, MethodIO, ProxyInput, SaveGroupInput, SaveHostInput } from './wire/dto.js'
+import type { AuthInput, MethodIO, ProxyInput, SaveGroupInput, SaveHostInput, SubRepoEntry } from './wire/dto.js'
 import { isSsh2Available, ssh2LoadFailure } from './ssh/lazy.js'
 import { HostKeyChangedError } from './ssh/hostkey.js'
 import { SshConnection } from './ssh/connection.js'
@@ -23,7 +23,7 @@ import { DEFAULT_IGNORE } from './sftp/ignore.js'
 import { insideRoot, previewUrl } from './preview-route.js'
 import { GitError, RemoteGit } from './git/remote-git.js'
 import { LocalBrowseError, listLocalDirectory, makeLocalDirectory } from './local/browse.js'
-import { fromLocalPosix, isLocalId, localReader, toLocalPosix } from './local/local-fs.js'
+import { fromLocalPosix, isInside, isLocalId, localReader, toLocalPosix, type LocalScope } from './local/local-fs.js'
 import { LocalGit } from './local/local-git.js'
 import type { GitRepo } from './git/remote-git.js'
 import type { RemoteFs } from './sftp/remote-fs.js'
@@ -727,7 +727,8 @@ export class WorkspaceGateway extends RemoteService {
       if (isLocalId(input.hostId)) return await this.localGit(input)
       const hostId = this.requireHost(input.hostId)
       const root = normalizeRemotePath(input.root)
-      if (!this.rt.bindings.list().some((b) => b.hostId === hostId && b.remotePath === root)) {
+      // 根目录可以是该主机已登记绑定的子目录（容器目录工作区里定位子仓库用），越界仍拒绝。
+      if (!this.rt.bindings.list().some((b) => b.hostId === hostId && (b.remotePath === root || insideRoot(b.remotePath, root)))) {
         throw new Error(`不是已登记的远程工作区：${root}`)
       }
       const rootGit = new RemoteGit(this.rt, hostId, root)
@@ -743,15 +744,28 @@ export class WorkspaceGateway extends RemoteService {
     })
   }
 
+  /**
+   * 本地会话的仓库根：默认是会话 cwd（工作区根）；浏览器传 root 时只接受工作区内的子目录
+   * （容器目录工作区里定位子仓库用），越界一律拒绝。返回原生路径。
+   * 符号链接逃逸由 LocalFs.resolve 再拦一次（本机文件操作统一走它）。
+   */
+  private async localBase(scope: LocalScope, posixRoot: string): Promise<string> {
+    if (posixRoot === '') return scope.root
+    const native = fromLocalPosix(posixRoot)
+    if (!isInside(scope.root, native)) throw new Error(`路径不在当前工作区内：${posixRoot}`)
+    return native
+  }
+
   /** 本地工作区的 git：路径在线上是本地 POSIX 形式（/C:/x），这里与原生路径互转。 */
   private async localGit(input: In<'git'>): Promise<unknown> {
     const scope = await this.rt.localScope(input.hostId)
-    const rootGit = new LocalGit(scope.root)
+    const base = await this.localBase(scope, input.root)
+    const rootGit = new LocalGit(base)
     let git: GitRepo = rootGit
-    let where = scope.root
+    let where = base
     if (input.worktree !== undefined) {
       const wt = fromLocalPosix(input.worktree)
-      const same = process.platform === 'win32' ? wt.toLowerCase() === scope.root.toLowerCase() : wt === scope.root
+      const same = process.platform === 'win32' ? wt.toLowerCase() === base.toLowerCase() : wt === base
       if (!same) {
         if (!(await rootGit.isOwnWorktree(wt))) throw new Error(`不是该仓库的工作目录：${input.worktree}`)
         git = new LocalGit(wt)
@@ -773,6 +787,8 @@ export class WorkspaceGateway extends RemoteService {
       switch (input.op) {
         case 'status':
           return await git.status()
+        case 'repos':
+          return await this.subRepos(input.hostId, where)
         case 'log':
           return { commits: await git.log(input.skip, input.limit, input.ref) }
         case 'tree':
@@ -836,6 +852,31 @@ export class WorkspaceGateway extends RemoteService {
       throw error
     }
   }
+  /**
+   * 列出一层子目录，并标出其中像 git 仓库的目录（含 .git）。
+   * 容器目录工作区（根目录不是仓库）用它定位子仓库；本地与远程走同一个入口：
+   * 本地的越界由 LocalFs.resolve 拦（内部按会话工作区校验），远程的根在 git() 里已校验过。
+   */
+  private async subRepos(hostId: string, where: string): Promise<{ root: string; entries: SubRepoEntry[] }> {
+    const local = isLocalId(hostId)
+    const fs = local ? this.rt.localFiles : this.rt.files
+    const listing = await fs.list(hostId, local ? toLocalPosix(where) : where)
+    const dirs = listing.entries.filter((e) => e.type === 'dir' || e.linkIsDir === true).slice(0, 300)
+    const entries = await Promise.all(
+      dirs.map(async (d): Promise<SubRepoEntry> => {
+        let repo = false
+        try {
+          repo = (await fs.list(hostId, d.path)).entries.some((e) => e.name === '.git')
+        } catch {
+          /* 读不了就按「不是仓库」处理，不影响其它候选 */
+        }
+        return { name: d.name, path: d.path, repo }
+      })
+    )
+    entries.sort((a, b) => (a.repo === b.repo ? 0 : a.repo ? -1 : 1) || a.name.localeCompare(b.name))
+    return { root: listing.path, entries }
+  }
+
   // ---------------------------------------------------------------- 本机目录（添加工作区兜底）
 
   /** 宿主目录选择器只有 native 能力时（macOS 桌面版），「添加工作区」的应用内浏览走这里。 */

@@ -241,6 +241,7 @@ function gitSchema() {
   const base = { hostId: id, root: remotePath, worktree: remotePath.optional() }
   return z.discriminatedUnion('op', [
     z.object({ ...base, op: z.literal('status') }),
+    z.object({ ...base, op: z.literal('repos') }),
     z.object({ ...base, op: z.literal('log'), skip: z.number().int().min(0).max(1_000_000), limit: z.number().int().min(1).max(1000), ref: ref.optional() }),
     z.object({ ...base, op: z.literal('tree'), ref, dir: z.string().max(4096) }),
     z.object({ ...base, op: z.literal('file'), ref, path: repoPath }),

@@ -654,6 +654,11 @@ const zh: Record<string, string> = {
   'git.ai.baseHead': '相对 HEAD',
   'git.ai.baseSession': '相对本会话首次改动前',
   'git.ai.badge': '本轮 AI 改动 {count} 个文件',
+  'git.subrepo.hint': '这个目录不是 Git 仓库。下面是它里面的子目录，标「仓库」的可以直接点进去：',
+  'git.subrepo.up': '上一层',
+  'git.subrepo.repo': '仓库',
+  'git.subrepo.current': '当前仓库：{path}',
+  'git.subrepo.back': '返回工作区根目录',
   // 侧边对话（方案 3.8）
   'sidechat.tabTitle': '侧边对话',
   'sidechat.label': '侧边对话',
@@ -1447,6 +1452,11 @@ const en: Record<string, string> = {
   'git.ai.baseHead': 'vs HEAD',
   'git.ai.baseSession': 'vs before the first change in this session',
   'git.ai.badge': '{count} files changed by AI this turn',
+  'git.subrepo.hint': 'This directory is not a Git repository. Below are its subdirectories; entries marked “repo” can be opened directly:',
+  'git.subrepo.up': 'Up one level',
+  'git.subrepo.repo': 'repo',
+  'git.subrepo.current': 'Repository: {path}',
+  'git.subrepo.back': 'Back to workspace root',
   // Side chat
   'sidechat.tabTitle': 'Side chat',
   'sidechat.label': 'Side chat',

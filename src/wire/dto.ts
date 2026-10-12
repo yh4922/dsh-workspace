@@ -245,6 +245,7 @@ export interface LocalListOutput {
 
 export type GitOp =
   | { op: 'status' }
+  | { op: 'repos' }
   | { op: 'log'; skip: number; limit: number; ref?: string }
   | { op: 'tree'; ref: string; dir: string }
   | { op: 'file'; ref: string; path: string }
@@ -266,6 +267,19 @@ export type GitOp =
 
 /** worktree：分支检出在另一个 git 工作目录时，在那个目录里执行（网关校验属于同一仓库）。 */
 export type GitInput = { hostId: string; root: string; worktree?: string } & GitOp
+
+/** 容器目录工作区里定位子仓库：一层子目录 + 该目录是否含 .git（是仓库的排在前面）。 */
+export interface SubRepoEntry {
+  name: string
+  path: string
+  repo: boolean
+}
+
+/** 子仓库清单：root = 实际列出的目录，entries = 该目录下的一层子目录。 */
+export interface SubRepoList {
+  root: string
+  entries: SubRepoEntry[]
+}
 
 export interface RemoteWorkspaceView {
   /** 本地占位目录。 */

@@ -28,6 +28,7 @@ import { copyText, relativeTo, showFloat, useContextMenu, type MenuItem } from '
 import { RenameInput, useRemoteFileMenu } from './file-menu.js'
 import { displayPath } from './remote-index.js'
 import { useLocalSupport } from './host-support.js'
+import { getRepoRoot, setRepoRoot as rememberRepoRoot } from './repo-root.js'
 import { AiChangesView } from './AiChangesView.js'
 import { refreshAiChanges, repoRelative, turnCount, useAiChanges, type AiScope } from './ai-changes.js'
 import { redactSecrets, type RedactResult } from './redact.js'
@@ -36,6 +37,7 @@ import { useLongPress } from './long-press.js'
 import { MOBILE_QUERY, useMediaQuery } from '../narrow.js'
 import { useTabStrip } from '../tabstrip.js'
 import type { AiChangeBase, AiChangedFile } from '../../wire/ai-changes.js'
+import type { SubRepoEntry } from '../../wire/dto.js'
 
 /** 未查看其他分支时的页签：文件 / 改动 / 历史，外加「AI 改动」（本会话模型改过的文件）。 */
 type View = 'files' | 'changes' | 'history' | 'ai'
@@ -74,6 +76,80 @@ function relTime(ms: number): string {
   return new Date(ms).toLocaleDateString()
 }
 
+/**
+ * 容器目录工作区（工作区根不是 git 仓库）时显示的仓库选择器。
+ * 列出当前目录下的子目录（谁含 .git 一眼可见），点进去就把 Git 面板的根切到那里；
+ * 也能沿工作区内的路径逐层往上返回，不会走出工作区。
+ */
+function SubRepoPicker(
+  props: Pick<SidebarBodyProps, 't' | 'api'> & {
+    hostId?: string
+    root?: string
+    wsRoot?: string
+    reason: string
+    onPick: (path: string | null) => void
+  }
+) {
+  const { t, api, hostId, root, wsRoot, reason, onPick } = props
+  const [state, setState] = useState<{ loading: boolean; error: string | null; dir: string; entries: SubRepoEntry[] }>({
+    loading: true,
+    error: null,
+    dir: root ?? '',
+    entries: []
+  })
+  useEffect(() => {
+    if (hostId === undefined || root === undefined) return
+    let alive = true
+    setState((s) => ({ ...s, loading: true, error: null }))
+    void api.call('git', { hostId, root, op: 'repos' }).then(
+      (raw) => {
+        const r = raw as { root?: unknown; entries?: unknown }
+        if (!alive) return
+        setState({
+          loading: false,
+          error: null,
+          dir: typeof r.root === 'string' ? r.root : root,
+          entries: Array.isArray(r.entries) ? (r.entries as SubRepoEntry[]) : []
+        })
+      },
+      (err: unknown) => {
+        if (alive) setState({ loading: false, error: messageOf(err), dir: root, entries: [] })
+      }
+    )
+    return () => {
+      alive = false
+    }
+  }, [api, hostId, root])
+  if (hostId === undefined || root === undefined) return null
+  if (state.loading) return <div className="dshws-tree-note">{t('files.loading')}</div>
+  const here = (state.dir === '' ? root : state.dir).replace(/\/+$/, '')
+  const base = (wsRoot ?? '').replace(/\/+$/, '')
+  const up = base !== '' && here !== base && here.startsWith(`${base}/`) ? here.slice(0, here.lastIndexOf('/')) : null
+  return (
+    <div className="dshws-side-note">
+      <div className="dshws-tree-note" data-tone={state.error !== null ? 'error' : undefined}>
+        {state.error ?? reason}
+      </div>
+      <div className="dshws-tree-note">{t('git.subrepo.hint')}</div>
+      <div className="dshws-side-tree">
+        {up !== null ? (
+          <button type="button" className="dshws-row" onClick={() => onPick(up)}>
+            <span className="dshws-row-caret">↑</span>
+            <span className="dshws-row-name">{t('git.subrepo.up')}</span>
+          </button>
+        ) : null}
+        {state.entries.map((e) => (
+          <button key={e.path} type="button" className="dshws-row" title={e.path} onClick={() => onPick(e.path)}>
+            <span className="dshws-row-caret" />
+            <span className="dshws-row-name">{e.name}</span>
+            {e.repo ? <span className="dshws-row-dim">{t('git.subrepo.repo')}</span> : null}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export function GitTab(props: SidebarBodyProps) {
   const { t, api, index, sessionId } = props
   const [, setVersion] = useState(0)
@@ -84,6 +160,25 @@ export function GitTab(props: SidebarBodyProps) {
   // 不应让 call / refresh 等回调变化 —— 它们一变就会触发重载并清掉右侧已打开的预览。
   const wsHost = workspace?.hostId
   const wsRoot = workspace?.remotePath
+  /**
+   * 容器目录工作区（工作区根本身不是 git 仓库）里，用户选中的仓库 / 目录；null = 工作区根。
+   * 按会话记在浏览器本地（`dshws.git.repoRoot.<会话>`，另有全局兜底），所以重开面板不会又回到根；
+   * 存的路径必须落在当前工作区内才采用 —— 会话换工作区后不会被旧值带偏。
+   */
+  const [repoRoot, setRepoRoot] = useState<string | null>(() => {
+    const saved = getRepoRoot(sessionId)
+    if (saved === null || wsRoot === undefined) return null
+    const root = wsRoot.replace(/\/+$/, '')
+    return saved === root || saved.startsWith(`${root}/`) ? saved : null
+  })
+  const effRoot: string = repoRoot ?? wsRoot ?? ''
+  const pickRepoRoot = useCallback(
+    (nextPath: string | null): void => {
+      setRepoRoot(nextPath)
+      rememberRepoRoot(sessionId, nextPath)
+    },
+    [sessionId]
+  )
 
   /** worktree：分支检出在另一个 git 工作目录时，在那个目录里执行（宿主校验属于同一仓库）。 */
   const call = useCallback(
@@ -91,12 +186,12 @@ export function GitTab(props: SidebarBodyProps) {
       if (wsHost === undefined || wsRoot === undefined) throw new Error(t('side.noWorkspace'))
       return (await api.call('git', {
         hostId: wsHost,
-        root: wsRoot,
+        root: effRoot,
         ...(worktree !== undefined ? { worktree } : {}),
         ...op
       })) as T
     },
-    [api, wsHost, wsRoot, t]
+    [api, wsHost, wsRoot, effRoot, t]
   )
 
   const [view, setView] = useState<View>('files')
@@ -244,7 +339,7 @@ export function GitTab(props: SidebarBodyProps) {
    * 当前分支 / 未检出的分支为 undefined。
    */
   const otherWorktree =
-    viewing !== null && binfo?.mode === 'worktree' && binfo.worktreePath !== undefined && workspace !== undefined && binfo.worktreePath !== workspace.remotePath
+    viewing !== null && binfo?.mode === 'worktree' && binfo.worktreePath !== undefined && workspace !== undefined && binfo.worktreePath !== effRoot
       ? binfo.worktreePath
       : undefined
   const [wtStatus, setWtStatus] = useState<GitStatus | null>(null)
@@ -360,7 +455,7 @@ export function GitTab(props: SidebarBodyProps) {
 
   /** 当前检出分支的文件树：远程目录里的真实文件（SFTP），隐藏 .git。路径统一为仓库内相对路径。 */
   // 当前分支 = 工作区根目录；检出在另一个 git 工作目录的分支 = 那个目录。
-  const rootDir = (otherWorktree ?? workspace.remotePath).replace(/\/+$/, '')
+  const rootDir = (otherWorktree ?? effRoot).replace(/\/+$/, '')
   const worktreeLoader = async (dir: string): Promise<GitTreeEntry[]> => {
     const r = await api.call('sftpList', { hostId: workspace.hostId, path: dir === '' ? rootDir || '/' : `${rootDir}/${dir}` })
     return r.entries
@@ -386,7 +481,7 @@ export function GitTab(props: SidebarBodyProps) {
     }
     setDiff(null)
     setViewFile(null)
-    setSource(`${(d.worktree ?? workspace.remotePath).replace(/\/+$/, '')}/${path}`)
+    setSource(`${(d.worktree ?? effRoot).replace(/\/+$/, '')}/${path}`)
   }
 
   /** 改动列表右键「打开文件」：在右侧打开工作目录里的真实文件（可编辑）。 */
@@ -714,23 +809,33 @@ export function GitTab(props: SidebarBodyProps) {
         </div>
       ) : null}
       {error !== null ? <div className="dshws-tree-note" data-tone="error">{error}</div> : null}
+      {repoRoot !== null ? (
+        <div className="dshws-tree-note">
+          {t('git.subrepo.current', { path: repoRoot })}{' '}
+          <button type="button" className="dshws-ibtn" onClick={() => pickRepoRoot(null)}>
+            {t('git.subrepo.back')}
+          </button>
+        </div>
+      ) : null}
       {status === null ? (
         <div className="dshws-tree-note">{t('files.loading')}</div>
-      ) : viewing === null && (view === 'ai' || !status.isRepo) ? (
+      ) : viewing === null && view === 'ai' ? (
         <>
-          {!status.isRepo ? <div className="dshws-side-note">{status.reason}</div> : null}
+          {!status.isRepo ? (
+            <SubRepoPicker t={t} api={api} hostId={wsHost} root={effRoot} wsRoot={wsRoot} reason={status.reason} onPick={pickRepoRoot} />
+          ) : null}
           <AiChangesView
             t={t}
             state={aiChanges}
             scope={aiScope}
             onScope={setAiScope}
-            rootDir={workspace.remotePath}
+            rootDir={effRoot}
             selected={diff?.abs ?? source}
             onOpen={(f) => void openAiChange(f)}
           />
         </>
       ) : !status.isRepo ? (
-        <div className="dshws-side-note">{status.reason}</div>
+        <SubRepoPicker t={t} api={api} hostId={wsHost} root={effRoot} wsRoot={wsRoot} reason={status.reason} onPick={pickRepoRoot} />
       ) : viewing !== null && binfo === null ? (
         <div className="dshws-tree-note">{t('files.loading')}</div>
       ) : viewing !== null ? (

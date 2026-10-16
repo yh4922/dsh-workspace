@@ -137,6 +137,11 @@ const zh: Record<string, string> = {
   'form.localShellCheck': '远程会话保留本机 shell（pwsh / powershell / cmd）',
   'form.localShellHint': '默认隐藏，防止模型在本机执行命令。远程会话里偶尔要用本机环境时可打开，比如对比两边的环境、用本机工具访问服务器上的服务。本机命令看不到远程文件；仅 Windows 本机有效。保存后立即生效，已打开的会话从下一轮对话起按新设置。',
   'form.localShellOn': '已开启：该主机的远程会话里，模型可以在这台电脑上执行任意命令，只给信任的主机打开',
+  'form.localFiles': '本机文件读写',
+  'form.localFilesCheck': '远程会话可用读/写/编辑/搜索工具直接读写本机文件',
+  'form.localFilesHint':
+    '默认关闭，本机路径（如 C:\\…）在远程会话里会被拒绝。打开后，该主机远程会话里的读/写/编辑/全局搜索/内容搜索遇到 Windows 盘符或 UNC 绝对路径时直接读写这台电脑上的文件；相对路径与 / 开头的 POSIX 路径仍作用于服务器。保存后立即生效，已打开的会话从下一轮对话起按新设置。只给信任的主机打开。',
+  'form.localFilesOn': '已开启：该主机的远程会话里，模型可以用文件工具读取和修改这台电脑上的文件，只给信任的主机打开',
   'form.save': '保存',
   'form.saving': '保存中…',
   'form.cancel': '取消',
@@ -949,6 +954,11 @@ const en: Record<string, string> = {
   'form.localShellCheck': 'Keep local shell in remote sessions (pwsh / powershell / cmd)',
   'form.localShellHint': 'Hidden by default so the model cannot run commands on this computer. Turn on when a remote session occasionally needs this computer, e.g. comparing environments or using local tools against services on the server. Local commands cannot see remote files. Windows only. Takes effect on save; open sessions follow the new setting from their next turn.',
   'form.localShellOn': 'On: in this host’s remote sessions, the model can run any command on this computer. Only enable for hosts you trust.',
+  'form.localFiles': 'Local file access',
+  'form.localFilesCheck': 'Let remote sessions read / write local files with the file tools',
+  'form.localFilesHint':
+    'Off by default: local paths (e.g. C:\\…) are rejected in remote sessions. When on, the read / write / edit / glob / grep tools treat Windows drive or UNC absolute paths as files on THIS computer in this host’s remote sessions; relative paths and POSIX /… paths still operate on the server. Takes effect on save; open sessions follow the new setting from their next turn. Only enable for hosts you trust.',
+  'form.localFilesOn': 'On: in this host’s remote sessions, the model can read and modify files on this computer with the file tools. Only enable for hosts you trust.',
   'form.save': 'Save',
   'form.saving': 'Saving…',
   'form.cancel': 'Cancel',

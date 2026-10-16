@@ -250,6 +250,7 @@ export class WorkspaceGateway extends RemoteService {
         })
         this.rt.log.info(created.id, 'config', `已新增主机「${created.label}」。`)
         logLocalShellChange(this.rt, created.id, undefined, input.allowLocalShell)
+        logLocalFilesChange(this.rt, created.id, undefined, input.allowLocalFiles)
         return viewOf(this.rt, created.id)
       }
 
@@ -275,6 +276,7 @@ export class WorkspaceGateway extends RemoteService {
       }
       this.rt.log.info(existing.id, 'config', `已更新主机「${input.label}」。`)
       logLocalShellChange(this.rt, existing.id, existing.allowLocalShell, input.allowLocalShell)
+      logLocalFilesChange(this.rt, existing.id, existing.allowLocalFiles, input.allowLocalFiles)
       return viewOf(this.rt, existing.id)
     })
   }
@@ -1167,6 +1169,21 @@ function logLocalShellChange(rt: WorkspaceRuntime, hostId: string, prev: boolean
   )
 }
 
+/**
+ * 「远程会话可用本机文件读写」变化时留痕（warn）：打开后模型的内置文件工具可以读改本机文件，
+ * 事后排查要能查到是谁、何时打开的。next 缺省（旧页面没提交这个键）= 未改，不记。
+ */
+function logLocalFilesChange(rt: WorkspaceRuntime, hostId: string, prev: boolean | undefined, next: boolean | undefined): void {
+  if (next === undefined || next === (prev === true)) return
+  rt.log.warn(
+    hostId,
+    'config',
+    next
+      ? '已允许该主机的远程工作区会话用内置文件工具（read / write / edit / glob / grep）读写本机文件 —— 本机绝对路径将直接作用于这台电脑；已打开的会话从下一轮对话起生效。'
+      : '已禁止该主机的远程工作区会话读写本机文件；已打开的会话从下一轮对话起恢复拒绝本机路径。'
+  )
+}
+
 /** 取主机的非凭据字段，空串统一视为「未设置」。 */
 function plainHostFields(input: SaveHostInput): Omit<HostRecord, 'id' | 'createdAt' | 'updatedAt' | 'auth' | 'proxy'> {
   return {
@@ -1183,7 +1200,8 @@ function plainHostFields(input: SaveHostInput): Omit<HostRecord, 'id' | 'created
     ...(nonEmpty(input.notes) ? { notes: input.notes } : {}),
     // 不能像上面那样「只在为真时写入」：updateHost 是合并补丁，关掉时必须显式写 false 才会覆盖旧值；
     // 键缺省（旧页面提交）= 不改。
-    ...(input.allowLocalShell !== undefined ? { allowLocalShell: input.allowLocalShell } : {})
+    ...(input.allowLocalShell !== undefined ? { allowLocalShell: input.allowLocalShell } : {}),
+    ...(input.allowLocalFiles !== undefined ? { allowLocalFiles: input.allowLocalFiles } : {})
   }
 }
 

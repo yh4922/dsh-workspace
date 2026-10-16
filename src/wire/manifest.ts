@@ -63,6 +63,7 @@ const saveHost = z.object({
   environmentVariables: env.optional(),
   notes: z.string().max(10000).optional(),
   allowLocalShell: z.boolean().optional(),
+  allowLocalFiles: z.boolean().optional(),
   auth: authInput.nullable().optional(),
   proxy: proxyInput.nullable().optional()
 })

@@ -65,6 +65,8 @@ export interface SaveHostInput {
   notes?: string
   /** 远程会话保留本机 shell（命令在本机执行）。键缺省 = 不改（编辑时保留原值）。 */
   allowLocalShell?: boolean
+  /** 远程会话可用内置文件工具读写本机文件。键缺省 = 不改（编辑时保留原值）。 */
+  allowLocalFiles?: boolean
   auth?: AuthInput | null
   proxy?: ProxyInput | null
 }

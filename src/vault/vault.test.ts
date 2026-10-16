@@ -106,11 +106,13 @@ describe('Vault', () => {
     const host = vault.createHost(baseHost({}))
     vault.updateHost(host.id, { allowLocalShell: true })
     expect(vault.getHost(host.id)?.allowLocalShell).toBe(true)
+    vault.updateHost(host.id, { allowLocalFiles: true })
+    expect(vault.getHost(host.id)?.allowLocalFiles).toBe(true)
     vault.deleteHost(host.id)
-    expect(count).toBe(3)
+    expect(count).toBe(4)
     off()
     vault.createHost(baseHost({}))
-    expect(count).toBe(3)
+    expect(count).toBe(4)
   })
 
   it('改主密码后旧密码失效、凭据仍可解出', () => {

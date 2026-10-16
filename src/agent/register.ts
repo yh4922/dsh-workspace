@@ -14,7 +14,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { WorkspaceRuntime } from '../runtime.js'
 import type { BindingStore, RemoteBinding } from '../workspace/bindings.js'
-import { pathKey } from '../workspace/bindings.js'
+import { isLocalHostPath, pathKey } from '../workspace/bindings.js'
 import { SshAgentBackend, type AgentBackend } from './backend.js'
 import type { PreimageStore } from './preimages.js'
 import {
@@ -82,6 +82,11 @@ export interface AgentToolsDeps {
    * 挂载时读一次，之后每次 subscribeHosts 通知再读，已打开的会话从下一轮对话起按新配置生效。
    */
   keepLocalShell?: (hostId: string) => boolean
+  /**
+   * 该主机的远程会话是否允许内置文件工具读写本机文件（主机配置 allowLocalFiles）。
+   * 与 keepLocalShell 不同，这里不做「挂载时读一次」：五工具按路径分发，每次调用现读（即时生效）。
+   */
+  keepLocalFiles?: (hostId: string) => boolean
   /** 主机配置变化订阅（保险箱写盘后通知）。不传 = 只在挂载时读一次。 */
   subscribeHosts?: (listener: () => void) => () => void
   /**
@@ -366,11 +371,38 @@ export function mountAgentTools(ctx: Context, deps: AgentToolsDeps): () => void 
         })
         return true
       }
-      step('read', () => wrap('read', (args, exec) => remoteRead(env, args, exec)))
-      step('write', () => wrap('write', (args, exec) => remoteWrite(env, args, exec)))
-      step('edit', () => wrap('edit', (args, exec) => remoteEdit(env, args, exec)))
-      step('glob', () => wrap('glob', (args, exec) => remoteGlob(env, args, exec)))
-      step('grep', () => wrap('grep', (args, exec) => remoteGrep(env, args, exec)))
+      /**
+       * 内置文件工具按路径分发（主机配置 allowLocalFiles）：
+       * 路径指向本机（Windows 盘符 / UNC 且不在占位目录内）且开关打开 → 交还宿主内置实现（本机文件系统）；
+       * 其余一律走远程管线 —— 默认（开关关闭）行为与旧版完全一致，本机路径照旧被 toRemotePath 拒绝。
+       * 每次调用现读开关：保存主机后已打开的会话下一轮对话即按新配置生效，无需重建。
+       */
+      const wrapWithLocalFiles = (
+        name: string,
+        localPathOf: (args: never) => string | undefined,
+        run: (args: never, exec: ToolExec) => Promise<unknown>
+      ): boolean => {
+        const builtin = builtinOf(name)
+        if (builtin === undefined) return false
+        tools.register({
+          ...builtin,
+          execute: async (args: unknown, exec: unknown) => {
+            const p = localPathOf(args as never)
+            if (p !== undefined && isLocalHostPath(binding, p) && safeKeepLocalFiles(deps, binding.hostId)) {
+              return await builtin.execute(args, exec)
+            }
+            return await run(args as never, exec as ToolExec)
+          }
+        })
+        return true
+      }
+      const filePathOf = (args: { file_path?: string }): string | undefined => args.file_path
+      const searchPathOf = (args: { path?: string }): string | undefined => args.path
+      step('read', () => wrapWithLocalFiles('read', filePathOf, (args, exec) => remoteRead(env, args, exec)))
+      step('write', () => wrapWithLocalFiles('write', filePathOf, (args, exec) => remoteWrite(env, args, exec)))
+      step('edit', () => wrapWithLocalFiles('edit', filePathOf, (args, exec) => remoteEdit(env, args, exec)))
+      step('glob', () => wrapWithLocalFiles('glob', searchPathOf, (args, exec) => remoteGlob(env, args, exec)))
+      step('grep', () => wrapWithLocalFiles('grep', searchPathOf, (args, exec) => remoteGrep(env, args, exec)))
       step('bash', () => {
         if (wrap('bash', (args, exec) => remoteBash(env, args, exec))) return true
         if (deps.defineTool === undefined) return false
@@ -478,11 +510,22 @@ function safeKeepLocalShell(deps: AgentToolsDeps, hostId: string): boolean {
   }
 }
 
+/** 读主机配置「允许本机文件读写」；读取失败按默认（关闭 → 走远程管线）处理，绝不抛错。 */
+function safeKeepLocalFiles(deps: AgentToolsDeps, hostId: string): boolean {
+  try {
+    return deps.keepLocalFiles?.(hostId) === true
+  } catch (error) {
+    deps.rt.log.error(hostId, 'agent', '读取主机配置 allowLocalFiles 失败，按默认拒绝本机路径', error)
+    return false
+  }
+}
+
 /**
  * 系统提示词：只对远程会话输出内容，本地会话返回空串（dsh-remote issue #13 的教训）。
  * @param keepLocalShell 该主机配置了保留本机 shell：必须告诉模型 pwsh 等跑在本机，否则它会把本机结果当成服务器结果。
+ * @param keepLocalFiles 该主机配置了允许本机文件读写：read 等内置文件工具的本机绝对路径（Windows 盘符 / UNC）直接作用于本机。
  */
-export function remotePromptText(binding: RemoteBinding | undefined, hostLabel: string, keepLocalShell = false): string {
+export function remotePromptText(binding: RemoteBinding | undefined, hostLabel: string, keepLocalShell = false, keepLocalFiles = false): string {
   if (binding === undefined) return ''
   const localShell = keepLocalShell
     ? [
@@ -491,9 +534,13 @@ export function remotePromptText(binding: RemoteBinding | undefined, hostLabel: 
         'Use bash for anything about the remote workspace. Only use the local shells when the user explicitly needs this computer (comparing environments, local tools reaching services on the remote host, local files). They cannot see remote files; never treat their output as describing the remote host.'
       ]
     : []
+  // 文件工具的路径口径随 allowLocalFiles 变化：关 = 一律远程；开 = 本机绝对路径（Windows 盘符 / UNC）走本机。
+  const fileTools = keepLocalFiles
+    ? 'The read, write, edit, glob and grep tools operate on that remote host by default: use POSIX paths (absolute or relative to the workspace root). A Windows absolute path such as C:\\... or \\\\server\\share points to THIS computer and is read / written locally — use it only when the user explicitly asks about files on this computer, and never mix local and remote paths in one call.'
+    : 'The read, write, edit, glob, grep and bash tools operate on that remote host, not on this computer.'
   return [
     `This session's workspace is a remote SSH workspace on ${hostLabel}, rooted at ${binding.remotePath}.`,
-    'The read, write, edit, glob, grep and bash tools operate on that remote host, not on this computer.',
+    fileTools,
     `Use POSIX paths: absolute (e.g. ${binding.remotePath.replace(/\/+$/, '')}/src/main.ts) or relative to the workspace root.`,
     `The local directory ${binding.localPath} is only a placeholder that binds this session to the remote host; do not put project files there.`,
     'bash runs `bash -lc` on the remote host in a fresh shell each call (pass workdir instead of cd). run_in_background is unavailable; for long-running processes use `nohup <cmd> > /tmp/<name>.log 2>&1 &` and read the log.',

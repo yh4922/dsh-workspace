@@ -11,6 +11,7 @@ import {
   BindingStore,
   REMOTE_ROOT_SEGMENT,
   folderName,
+  isLocalHostPath,
   isRemoteInside,
   relativeToRoot,
   remotePathSegments,
@@ -303,5 +304,29 @@ describe('toRemotePath', () => {
     expect(relativeToRoot(b, '/srv/app/src/a.ts')).toBe('src/a.ts')
     expect(relativeToRoot(b, '/srv/app')).toBe('.')
     expect(relativeToRoot(b, '/etc/x')).toBe('/etc/x')
+  })
+})
+
+describe('isLocalHostPath（allowLocalFiles 的路径判定，与 toRemotePath 的拒绝分支逐分支对齐）', () => {
+  const b = { localPath: path.join(tmpdir(), 'ph', 'app'), hostId: 'h', remotePath: '/srv/app', title: 'app', createdAt: '' }
+
+  it('Windows 盘符 / UNC 绝对路径算本机；POSIX 绝对、相对路径永远不算（allowLocalFiles 不改变远程口径）', () => {
+    expect(isLocalHostPath(b, 'C:\\Users\\me\\note.txt')).toBe(true)
+    expect(isLocalHostPath(b, 'c:/users/me/note.txt')).toBe(true)
+    expect(isLocalHostPath(b, '\\\\server\\share\\a.txt')).toBe(true)
+    expect(isLocalHostPath(b, '/etc/hosts')).toBe(false)
+    expect(isLocalHostPath(b, 'src/a.ts')).toBe(false)
+    expect(isLocalHostPath(b, '.')).toBe(false)
+    expect(isLocalHostPath(b, '')).toBe(false)
+  })
+
+  it('占位目录内的 Windows 路径不算本机 —— 与 toRemotePath 的「映射回远程」例外一致', () => {
+    expect(isLocalHostPath(b, path.join(b.localPath, 'src', 'a.ts'))).toBe(false)
+    expect(isLocalHostPath(b, b.localPath)).toBe(false)
+    expect(isLocalHostPath(b, path.join(b.localPath, '..', 'elsewhere', 'x.txt'))).toBe(true)
+  })
+
+  it('非字符串输入按不算本机处理（与工具参数缺省一致）', () => {
+    expect(isLocalHostPath(b, undefined as unknown as string)).toBe(false)
   })
 })

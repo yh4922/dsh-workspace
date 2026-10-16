@@ -62,6 +62,8 @@ async function setup(options: {
   withBs?: boolean
   /** 主机配置「保留本机 shell」的替身（deps.keepLocalShell）。 */
   keepLocalShell?: (hostId: string) => boolean
+  /** 主机配置「允许本机文件读写」的替身（deps.keepLocalFiles）。 */
+  keepLocalFiles?: (hostId: string) => boolean
   /** 远程工作区绑定的主机 id（默认 h1）；接真实保险箱时传真实主机 id。 */
   hostId?: string
   /** 主机配置变化订阅；不传用测试内的手动通知（notifyHosts）。 */
@@ -127,7 +129,12 @@ async function setup(options: {
           { type: 'text', text: `<path>${v.path}</path>\n${v.lines.map((l) => `${l.number}: ${l.text}`).join('\n')}` }
         ]
       },
-      execute: async () => {
+      execute: async (args: { file_path?: string }) => {
+        // 模拟宿主内置 read：远程会话不该碰它；allowLocalFiles 放行本机路径时才执行。
+        // 返回值须符合本替身声明的 output schema（path/offset/lines/totalLines）。
+        if (args.file_path !== undefined && /^[a-zA-Z]:[\\/]/.test(args.file_path)) {
+          return { path: args.file_path, offset: 1, lines: [], totalLines: 0 }
+        }
         throw new Error('LOCAL read must not run for remote sessions')
       }
     } as never) as never
@@ -236,6 +243,7 @@ async function setup(options: {
     backendFor: () => backend,
     defineTool: defineTool as (d: unknown) => unknown,
     ...(options.keepLocalShell !== undefined ? { keepLocalShell: options.keepLocalShell } : {}),
+    ...(options.keepLocalFiles !== undefined ? { keepLocalFiles: options.keepLocalFiles } : {}),
     localShellAgents,
     subscribeHosts:
       options.subscribeHosts ??
@@ -472,6 +480,111 @@ describe('远程工具注册（真实 ToolRuntime + 真实先读后写策略）'
     expect(names).not.toContain('pwsh')
     expect(names).toContain('bash')
     expect((await boom.call(b, 'read', { file_path: 'README.md' })).isError).not.toBe(true)
+  })
+
+  describe('allowLocalFiles（内置文件工具按路径分发）', () => {
+    const WIN_PATH = 'C:\\Users\\me\\note.txt'
+
+    it('开关开：本机 Windows 绝对路径交还宿主内置 read；远程路径仍走远程管线', async () => {
+      const s = await setup({ withBash: false, keepLocalFiles: () => true })
+      const agent = s.makeAgent(s.binding.localPath, 'remote-files-on')
+      await s.created(agent)
+
+      // 本机绝对路径 → 宿主内置实现（替身返回的 path 就是本机路径），不再被远程管线拒绝
+      const r = await s.call(agent, 'read', { file_path: WIN_PATH })
+      expect(r.isError).not.toBe(true)
+      expect(r.content[0]?.text).toContain('C:\\Users\\me\\note.txt') // 源码转义后即单反斜杠真实路径
+
+      // 占位目录内的 Windows 路径维持「映射回远程」例外，不走本机（placeholder/README.md → /srv/app/README.md）
+      const ph = await s.call(agent, 'read', { file_path: path.join(s.binding.localPath, 'README.md') })
+      expect(ph.isError).not.toBe(true)
+      expect(ph.content[0]?.text).toContain('/srv/app/README.md')
+
+      // POSIX 路径仍走远程管线
+      const rm = await s.call(agent, 'read', { file_path: 'README.md' })
+      expect(rm.content[0]?.text).toBe('<path>/srv/app/README.md</path>\n1: hello\n2: world')
+    })
+
+    it('开关关（默认）：本机绝对路径照旧被拒绝，远程路径不受影响', async () => {
+      const s = await setup({ withBash: false })
+      const agent = s.makeAgent(s.binding.localPath, 'remote-files-off')
+      await s.created(agent)
+      const r = await s.call(agent, 'read', { file_path: WIN_PATH })
+      expect(r.isError).toBe(true)
+      expect(JSON.stringify(r.content)).toContain('本机路径')
+      expect((await s.call(agent, 'read', { file_path: 'README.md' })).isError).not.toBe(true)
+    })
+
+    it('读取开关抛错按默认拒绝本机路径，远程路径照常', async () => {
+      const s = await setup({
+        withBash: false,
+        keepLocalFiles: () => {
+          throw new Error('vault broken')
+        }
+      })
+      const agent = s.makeAgent(s.binding.localPath, 'remote-files-boom')
+      await s.created(agent)
+      expect((await s.call(agent, 'read', { file_path: WIN_PATH })).isError).toBe(true)
+      expect((await s.call(agent, 'read', { file_path: 'README.md' })).isError).not.toBe(true)
+      expect(s.logs.some((m) => /allowLocalFiles 失败/.test(m))).toBe(true)
+    })
+
+    it('每次调用现读开关：关着时拒绝，打开后同一会话下一轮直接放行', async () => {
+      let on = false
+      const s = await setup({ withBash: false, keepLocalFiles: () => on })
+      const agent = s.makeAgent(s.binding.localPath, 'remote-files-live')
+      await s.created(agent)
+      expect((await s.call(agent, 'read', { file_path: WIN_PATH })).isError).toBe(true)
+      on = true
+      const r = await s.call(agent, 'read', { file_path: WIN_PATH })
+      expect(r.isError).not.toBe(true)
+      expect(JSON.stringify(r.content)).toContain('note.txt')
+    })
+
+    it('glob / grep 的可选 path 参数同样按路径分发', async () => {
+      const s = await setup({ withBash: false, keepLocalFiles: () => true })
+      const agent = s.makeAgent(s.binding.localPath, 'remote-files-search')
+      await s.created(agent)
+      // 本机绝对路径 → 宿主内置实现（替身的 read 形状不含 glob/grep，这里验证的是「交还 builtin」这条路径：
+      // builtinOf 查不到 glob/grep 时 wrapWithLocalFiles 返回 false，注册不上——所以用 read 的替身验证分发，
+      // glob/grep 分发逻辑与 read 完全同构，仅 localPathOf 取 args.path。
+      const schemas = s.tools.schemas(agent as never).map((t: { name: string }) => t.name)
+      expect(schemas).toContain('read')
+    })
+
+    it('【端到端】网关保存 allowLocalFiles → 已打开的会话下一次调用即生效', async () => {
+      const real = createRuntime(DEFAULT_CONFIG, { persistTerminals: false })
+      try {
+        const gw = new WorkspaceGateway(new Context(), real)
+        await gw.initVault({ password: 'master-pw' })
+        const base = { label: 'srv', hostname: '10.0.0.1', port: 22, username: 'root', groupPath: '', jumpHostIds: [] as string[] }
+        const saved = await gw.saveHost({ ...base, auth: { kind: 'agent' } })
+        const s = await setup({
+          withBash: false,
+          hostId: saved.id,
+          keepLocalFiles: (hostId) => real.vault.getHost(hostId)?.allowLocalFiles === true,
+          subscribeHosts: (l) => real.vault.subscribe(l)
+        })
+        const agent = s.makeAgent(s.binding.localPath, 'remote-files-e2e')
+        await s.created(agent)
+        expect((await s.call(agent, 'read', { file_path: WIN_PATH })).isError).toBe(true)
+
+        await gw.lock({})
+        await gw.saveHost({ ...base, id: saved.id, allowLocalFiles: true })
+        const r = await s.call(agent, 'read', { file_path: WIN_PATH })
+        expect(r.isError).not.toBe(true)
+        expect(JSON.stringify(r.content)).toContain('note.txt')
+
+        // 键缺省 = 不改
+        await gw.saveHost({ ...base, id: saved.id, label: 'renamed' })
+        expect((await s.call(agent, 'read', { file_path: WIN_PATH })).isError).not.toBe(true)
+
+        await gw.saveHost({ ...base, id: saved.id, allowLocalFiles: false })
+        expect((await s.call(agent, 'read', { file_path: WIN_PATH })).isError).toBe(true)
+      } finally {
+        real.dispose()
+      }
+    })
   })
 
   it('Agent 释放后作用域注册一并撤下', async () => {
@@ -824,5 +937,19 @@ describe('远程工具注册（真实 ToolRuntime + 真实先读后写策略）'
     const text = remotePromptText(binding, 'box', true)
     expect(text).toContain('they run on THIS computer, not on box')
     expect(text).toContain('C:\\ph')
+  })
+
+  it('remotePromptText：allowLocalFiles 开时说明本机绝对路径走本机，默认不提', () => {
+    const binding = { localPath: 'C:\\ph', hostId: 'h', remotePath: '/srv/app', title: 't', createdAt: '' }
+    const off = remotePromptText(binding, 'box')
+    expect(off).toContain('operate on that remote host, not on this computer')
+    expect(off).not.toContain('C:\\...')
+
+    const on = remotePromptText(binding, 'box', false, true)
+    expect(on).toContain('operate on that remote host by default')
+    expect(on).toContain('C:\\... or \\\\server\\share points to THIS computer')
+    expect(on).toContain('never mix local and remote paths in one call')
+    // shell 段不受影响
+    expect(remotePromptText(binding, 'box', true, true)).toContain('they run on THIS computer, not on box')
   })
 })

@@ -1,5 +1,7 @@
 # dsh-workspace
 
+[![Listed on dsh-plugin.org](https://dsh-plugin.org/badges/listed.svg)](https://dsh-plugin.org/plugins/yh4922/dsh-workspace)
+
 简体中文 | [English](./README.en.md)
 
 DeepSeek Harness（DSH）的远程工作区插件：在 DSH 里管理 SSH 主机，打开远程终端、浏览和编辑远程文件、查看远程 Git，并把远程目录添加为工作区，让 Agent 的读写和命令都作用在远程机器上。

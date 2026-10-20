@@ -152,6 +152,17 @@ export class GitRepo {
     return { isRepo: true, ...parseStatusV2(r.stdout) }
   }
 
+  /**
+   * 当前分支名（作用域记忆的分支过滤用）。比 status 轻得多：不扫工作区。
+   * @returns 分离 HEAD、不是仓库、没装 git 时返回 undefined
+   */
+  async currentBranch(): Promise<string | undefined> {
+    const r = await this.run(['rev-parse', '--abbrev-ref', 'HEAD'])
+    if (r.timedOut || r.code !== 0) return undefined
+    const name = r.stdout.trim()
+    return name === '' || name === 'HEAD' ? undefined : name
+  }
+
   /** 提交历史：不传引用为全部分支；传引用则只看该分支（查看其他分支时用）。 */
   async log(skip: number, limit: number, ref?: string): Promise<GitCommit[]> {
     const scope = ref === undefined ? '--all' : await this.resolve(ref)

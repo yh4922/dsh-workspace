@@ -11,6 +11,7 @@ import { XTERM_CSS } from './terminal/xterm-css.generated.js'
 import { TASKS_CSS } from './tasks/styles.js'
 import { SIDECHAT_CSS } from './sidechat/styles.js'
 import { TABS_CSS } from './tabs/styles.js'
+import { MEMORY_CSS } from './memory/styles.js'
 
 export const STYLE_ID = 'dsh-workspace-styles'
 
@@ -1371,7 +1372,7 @@ export function injectStyles(): () => void {
   if (existing !== null) existing.remove()
   const style = document.createElement('style')
   style.id = STYLE_ID
-  style.textContent = `${XTERM_CSS}\n${CSS}\n${TASKS_CSS}\n${SIDECHAT_CSS}\n${TABS_CSS}`
+  style.textContent = `${XTERM_CSS}\n${CSS}\n${TASKS_CSS}\n${SIDECHAT_CSS}\n${TABS_CSS}\n${MEMORY_CSS}`
   document.head.appendChild(style)
   return () => {
     style.remove()

@@ -9,6 +9,7 @@ import type { MethodIO } from './dto.js'
 import { ASSOC_MAX, ASSOC_MODES, ASSOC_VIEWERS, CUSTOM_CSS_MAX, LARGE_FILE_MB_MAX, LARGE_FILE_MB_MIN, RETIRED_SIDEBAR_TAB_KEYS, SESSION_ID_MAX, SIDEBAR_TAB_KEYS, SIDECHATS_MAX } from './sidebar-prefs.js'
 import { DIR_STAMPS_MAX, OPEN_URL_MAX, OPEN_WITH_MAX, OPEN_WITH_NAME_MAX } from './open-with.js'
 import { TEAM_TASK_ACTIONS } from './tasks.js'
+import { IMPORTANCE, MEMORY_CONTENT_MAX, MEMORY_SECTIONS, MEMORY_TITLE_MAX } from './memory.js'
 
 // 编译期保证 dto 的 MethodIO 与 contract 的 METHODS 一一对应，漏一个直接报错。
 type AssertSameKeys<A, B> = [Exclude<keyof A, B>, Exclude<B, keyof A>] extends [never, never]
@@ -188,7 +189,70 @@ const INPUTS: Record<MethodName, z.ZodType> = {
       subject: z.string().trim().min(1).max(500).optional(),
       description: z.string().max(20_000).optional()
     })
+    .strict(),
+  memory: memorySchema()
+}
+
+/** 作用域记忆各 op 的输入校验（严格模式：未知字段直接拒绝）。 */
+function memorySchema() {
+  const sid = z.string().min(1).max(SESSION_ID_MAX)
+  const mid = z.string().min(1).max(64)
+  const scope = z.discriminatedUnion('layer', [
+    z.object({ layer: z.literal('global') }).strict(),
+    z.object({ layer: z.literal('project'), projectId: z.string().min(1).max(200) }).strict(),
+    z.object({ layer: z.literal('session'), sessionId: sid }).strict()
+  ])
+  const content = z.string().max(MEMORY_CONTENT_MAX)
+  const title = z.string().max(MEMORY_TITLE_MAX)
+  const importance = z.enum(IMPORTANCE)
+  const section = z.enum(MEMORY_SECTIONS)
+  const branches = z.array(z.string().trim().min(1).max(255)).max(50)
+  const draft = z
+    .object({ title: title.optional(), content: content.min(1), section: section.optional(), importance: importance.optional(), pinned: z.boolean().optional(), branches: branches.optional() })
     .strict()
+  const patch = z
+    .object({ title: title.optional(), content: content.min(1).optional(), enabled: z.boolean().optional(), pinned: z.boolean().optional(), importance: importance.optional(), branches: branches.optional(), section: section.optional() })
+    .strict()
+  const settings = z
+    .object({
+      enabled: z.boolean().optional(),
+      summarizerModel: z.object({ provider: z.string().min(1).max(200), model: z.string().min(1).max(200) }).strict().nullable().optional(),
+      summarizeEveryTurns: z.number().int().min(1).max(50).optional(),
+      toolEnabled: z.boolean().optional()
+    })
+    .strict()
+  const layer2 = z.enum(['project', 'global'])
+  return z.discriminatedUnion('op', [
+    z.object({ op: z.literal('status') }).strict(),
+    z.object({ op: z.literal('overview') }).strict(),
+    z.object({ op: z.literal('settings'), patch: settings }).strict(),
+    z.object({ op: z.literal('models') }).strict(),
+    z.object({ op: z.literal('list'), scope }).strict(),
+    z.object({ op: z.literal('sessionView'), sessionId: sid }).strict(),
+    z.object({ op: z.literal('add'), scope, draft }).strict(),
+    z.object({ op: z.literal('update'), scope, id: mid, patch }).strict(),
+    z.object({ op: z.literal('remove'), scope, id: mid }).strict(),
+    z.object({ op: z.literal('promote'), scope, id: mid, to: layer2 }).strict(),
+    z.object({ op: z.literal('history'), scope, id: mid }).strict(),
+    z.object({ op: z.literal('revert'), scope, id: mid, recordId: mid }).strict(),
+    z.object({ op: z.literal('trash') }).strict(),
+    z.object({ op: z.literal('restore'), trashId: mid }).strict(),
+    z.object({ op: z.literal('candidates'), sessionId: sid.optional() }).strict(),
+    z
+      .object({
+        op: z.literal('approve'),
+        decision: z.object({ id: mid, title: title.optional(), content: content.min(1).optional(), layer: layer2.optional(), importance: importance.optional() }).strict()
+      })
+      .strict(),
+    z.object({ op: z.literal('reject'), id: mid }).strict(),
+    z.object({ op: z.literal('approveAll'), sessionId: sid.optional() }).strict(),
+    z.object({ op: z.literal('rejectAll'), sessionId: sid.optional() }).strict(),
+    z.object({ op: z.literal('search'), query: z.string().trim().min(1).max(200) }).strict(),
+    z.object({ op: z.literal('suggestTitle'), content: content.min(1) }).strict(),
+    z.object({ op: z.literal('reorganize'), sessionId: sid }).strict(),
+    z.object({ op: z.literal('orphans') }).strict(),
+    z.object({ op: z.literal('cleanup'), sessionIds: z.array(sid).max(10_000) }).strict()
+  ])
 }
 
 /** 「侧边栏」偏好的局部更新：严格模式，未知字段直接拒绝（防止浏览器把任意数据写进偏好文件）。 */

@@ -35,6 +35,7 @@ import { openExternal } from './open-external.js'
 import { foldAiChanges } from './agent/ai-changes.js'
 import { subagentLive, workflowRuns } from './tasks/service.js'
 import { createTeamTask, updateTeamTask } from './host-internal/teams.js'
+import { MemoryNotFoundError } from './memory/store.js'
 
 /** 远程（RemoteFs）与本地（LocalFs）共同的文件操作面。 */
 type FileOps = Pick<
@@ -95,6 +96,9 @@ export function toRemote(error: unknown): RemoteError {
   }
   if (error instanceof RemoteConflictError) {
     return new RemoteError(ERROR_CODES.conflict, error.message, { mtime: error.mtime, size: error.size })
+  }
+  if (error instanceof MemoryNotFoundError) {
+    return new RemoteError(ERROR_CODES.notFound, error.message, {})
   }
   if (error instanceof RemoteExistsError) {
     return new RemoteError(ERROR_CODES.exists, error.message, { path: error.remotePath })
@@ -984,6 +988,11 @@ export class WorkspaceGateway extends RemoteService {
   /** 团队看板：修改任务（CAS，revision 过期 → reason:'conflict'）。 */
   teamsTaskUpdate(input: In<'teamsTaskUpdate'>): Out<'teamsTaskUpdate'> {
     return this.guard(() => updateTeamTask(this.rt.host.internal, input))
+  }
+
+  /** 作用域记忆：按 op 分派到 MemoryService（界面上的所有写入者都是用户）。 */
+  memory(input: In<'memory'>): Out<'memory'> {
+    return this.guard(() => this.rt.memory.service.handle(input))
   }
 
   /** 远程会话里某文件被改之前的原文（agent/preimages.ts 的基线）；拿不到返回 null，浏览器退回相对 HEAD。 */

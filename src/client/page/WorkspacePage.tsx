@@ -19,6 +19,7 @@ import { takeRequestedSection } from './update-flag.js'
 import { FilesPane } from './FilesPane.js'
 import { SettingsPane } from './SettingsPane.js'
 import { SidebarPane } from './SidebarPane.js'
+import { MemoryPane } from '../memory/MemoryPane.js'
 import { useWorkspace, messageOf } from './useWorkspace.js'
 import { AutoUnlockDialog, ChangePasswordDialog, HostKeyDialog, SetupBanner, UnlockBanner } from './vault.js'
 
@@ -28,7 +29,7 @@ const CLIENT_SCROLLBACK_LINES = 5000
 const INITIAL_COLS = 120
 const INITIAL_ROWS = 32
 
-type Section = 'hosts' | 'files' | 'terminals' | 'logs' | 'sidebar' | 'settings'
+type Section = 'hosts' | 'files' | 'terminals' | 'logs' | 'memory' | 'sidebar' | 'settings'
 
 export interface WorkspacePageProps {
   t: Translate
@@ -265,7 +266,7 @@ function WorkspacePageInner(props: WorkspacePageProps) {
       ) : null}
 
       <div className="dshws-sections" role="tablist">
-        {(['hosts', 'files', 'terminals', 'logs', 'sidebar', 'settings'] as const).map((key) => (
+        {(['hosts', 'files', 'terminals', 'logs', 'memory', 'sidebar', 'settings'] as const).map((key) => (
           <button
             key={key}
             type="button"
@@ -385,6 +386,12 @@ function WorkspacePageInner(props: WorkspacePageProps) {
         {section === 'logs' ? (
           <div className="dshws-scroll">
             <LogPanel t={t} model={model} hosts={hosts} hostId={selectedId} onHostChange={setSelectedId} />
+          </div>
+        ) : null}
+
+        {section === 'memory' ? (
+          <div className="dshws-scroll">
+            <MemoryPane t={t} call={model.call} notify={notify} onError={report} />
           </div>
         ) : null}
 

@@ -21,6 +21,7 @@ import type { BetterSidebarStatus, BetterSidebarToggleOutput } from '../better-s
 import type { SidebarPrefs, SidebarPrefsPatch } from './sidebar-prefs.js'
 import type { AiChangeBase, AiChangesResult } from './ai-changes.js'
 import type { SubagentLiveResult, TeamTaskCreateInput, TeamTaskMutationResult, TeamTaskUpdateInput, WorkflowRunsResult } from './tasks.js'
+import type { MemoryInput, MemoryOp, MemoryOutputs } from './memory.js'
 
 export type { RecentTerminal, TerminalView, ListResult, ReadResult, RemoteEntry, RemoveResult, SearchResult, UpdateStatus, UploadView }
 export type { BetterSidebarStatus, BetterSidebarToggleOutput, SidebarPrefs, SidebarPrefsPatch }
@@ -234,6 +235,8 @@ export interface MethodIO {
   teamsTaskCreate: [TeamTaskCreateInput, TeamTaskMutationResult]
   /** 团队看板：修改任务（CAS；revision 过期返回 reason:'conflict'）。 */
   teamsTaskUpdate: [TeamTaskUpdateInput, TeamTaskMutationResult]
+  /** 作用域记忆：单方法按 op 分派（输出类型见 MemoryOutputs[op]，浏览器端用 memoryCall 取精确类型）。 */
+  memory: [MemoryInput, MemoryOutputs[MemoryOp]]
 }
 
 export interface LocalListOutput {

@@ -28,6 +28,7 @@ import { fileURLToPath } from 'node:url'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { mountAgentTools, remotePromptText } from './agent/register.js'
 import { createHostInternal, type ProbeContext } from './host-internal/index.js'
+import { mountMemoryEvents, mountMemoryPrompt } from './memory/mount.js'
 
 export const name = 'dsh-workspace'
 
@@ -37,7 +38,7 @@ export { ASSETS_PREFIX, createAssetsHandler } from './assets-route.js'
 /**
  * 只硬依赖 typert（浏览器 ↔ 宿主的远程调用通道），它属于宿主核心组合，总是存在。
  *
- * webServer / webRuntime（终端 WebSocket）放在 ctx.inject 子作用域里按需启用：
+ * webServer（终端 WebSocket / 文件传输等 HTTP 路由）放在 ctx.inject 子作用域里按需启用：
  * 缺席时只是终端不可用，主机管理照常工作。tools / systemPrompt 留到 P1。
  */
 export const inject = ['typert']
@@ -90,6 +91,26 @@ interface WebRuntimeFace {
   trustedHosts: readonly string[]
 }
 
+/**
+ * 宿主的信任列表（非回环的可信地址）。DSH 0.1.x 在 webRuntime 服务上；0.2.1 起没有 webRuntime，
+ * 由 connection 服务（HostConnectionService）持有。都取不到时返回空表 = 只放行本机回环，不放宽。
+ * 每次调用现取：部署方改了信任列表无需重启插件。
+ */
+export function trustedHostsOf(ctx: unknown): readonly string[] {
+  const get = (name: string): unknown => {
+    try {
+      return (ctx as { get(n: string): unknown }).get(name)
+    } catch {
+      return undefined
+    }
+  }
+  for (const name of ['webRuntime', 'connection']) {
+    const list = (get(name) as Partial<WebRuntimeFace> | undefined)?.trustedHosts
+    if (Array.isArray(list)) return list.filter((s): s is string => typeof s === 'string')
+  }
+  return []
+}
+
 export function apply(ctx: Context, config: PluginConfig): void {
   ensurePluginRoot()
   const runtime = createRuntime(config)
@@ -129,8 +150,9 @@ export function apply(ctx: Context, config: PluginConfig): void {
     log.error('', 'startup', '无法定位编辑器资源目录，文件编辑器将不可用。', cause)
   }
 
-  // 终端 WebSocket 与文件传输：webServer / webRuntime 就绪后才挂载。
-  // 记录两个服务当前是否可见 —— 路由没挂上时，连接日志里能直接看到缺的是哪个。
+  // 终端 WebSocket 与文件传输：只等 webServer 就绪就挂载。
+  // 信任列表 trustedHosts 每次请求现取（见 trustedHostsOf）：DSH 0.2.1 起已没有 webRuntime 服务，
+  // 改由 connection 服务持有 —— 原先硬依赖 webRuntime，新内核下整组路由不挂载，上传 / 下载 / 终端全部 405。
   const has = (name: string): boolean => {
     try {
       return (ctx as unknown as { get(n: string): unknown }).get(name) !== undefined
@@ -138,11 +160,15 @@ export function apply(ctx: Context, config: PluginConfig): void {
       return false
     }
   }
-  log.info('', 'startup', `等待宿主 Web 服务：webServer=${has('webServer') ? '已就绪' : '未就绪'}，webRuntime=${has('webRuntime') ? '已就绪' : '未就绪'}。`)
+  log.info(
+    '',
+    'startup',
+    `等待宿主 Web 服务：webServer=${has('webServer') ? '已就绪' : '未就绪'}，信任列表来源=${has('webRuntime') ? 'webRuntime' : has('connection') ? 'connection' : '未就绪（仅放行本机回环）'}。`
+  )
   const inject = (ctx as unknown as {
     inject(deps: string[], callback: (sub: Context) => void): unknown
   }).inject.bind(ctx)
-  inject(['webServer', 'webRuntime'], (sub) => mountTerminalSocket(sub, runtime))
+  inject(['webServer'], (sub) => mountTerminalSocket(sub, runtime))
 
   // 宿主可选服务：插件管理器（自更新）与会话（本地文件管理按会话取工作区根目录）。
   // 放进 inject 子作用域：服务不存在时对应功能提示不可用，不影响其余部分。
@@ -212,6 +238,21 @@ export function apply(ctx: Context, config: PluginConfig): void {
   )
   inject(['systemPrompt'], (sub) => mountRemotePrompt(sub, runtime, localShellAgents))
 
+  // 作用域记忆：可选宿主服务逐个注入（headless 环境可能没有 workspaceRegistry / sessionTitle）。
+  const memory = runtime.memory
+  for (const name of ['workspaceRegistry', 'llm', 'sessionTitle', 'sessionQuery', 'agentDefaultModel'] as const) {
+    inject([name], (sub) => {
+      sub.effect(() => {
+        ;(memory.refs as Record<string, unknown>)[name] = (sub as unknown as Record<string, unknown>)[name]
+        return () => {
+          delete (memory.refs as Record<string, unknown>)[name]
+        }
+      }, `dsh-workspace: memory ${name}`)
+    })
+  }
+  inject(['systemPrompt'], (sub) => mountMemoryPrompt(sub, memory))
+  ctx.effect(() => mountMemoryEvents(ctx, memory, defineTool as (d: unknown) => unknown), 'dsh-workspace: memory events')
+
   // 所有副作用都挂在 fiber 上，卸载/重载时自动回收。
   // 连接池尤其重要：不回收会留下常驻 SSH 连接与 keepalive 定时器。
   ctx.effect(() => () => runtime.dispose(), 'dsh-workspace.teardown')
@@ -253,7 +294,8 @@ function mountRemotePrompt(ctx: Context, runtime: WorkspaceRuntime, localShellAg
 
 /** 注册终端 WebSocket 升级路由，并在前面挡一道与 /api 网关一致的信任围栏。 */
 function mountTerminalSocket(ctx: Context, runtime: WorkspaceRuntime): void {
-  const face = ctx as unknown as { webServer: WebServerFace & { port?: number }; webRuntime: WebRuntimeFace }
+  const face = ctx as unknown as { webServer: WebServerFace & { port?: number } }
+  const trustedHosts = (): readonly string[] => trustedHostsOf(ctx)
   const wss = new WebSocketServer({ noServer: true, maxPayload: 2 * 1024 * 1024 })
   runtime.log.info('', 'startup', `宿主 Web 服务已就绪（端口 ${face.webServer.port ?? '未知'}），开始挂载终端与文件传输路由。`)
 
@@ -272,7 +314,7 @@ function mountTerminalSocket(ctx: Context, runtime: WorkspaceRuntime): void {
         path: TERMINAL_WS_PATH,
         handler: (req, socket, head) => {
           // 每次请求现读 trustedHosts：部署方更新信任列表后无需重启插件即生效。
-          if (!isTrustedRequest(req, face.webRuntime.trustedHosts)) {
+          if (!isTrustedRequest(req, trustedHosts())) {
             // 带上 Origin：页面来源与宿主地址不一致（如桌面版自定义页面来源）时，靠它判断是哪一种被拒。
             runtime.log.warn(
               '',
@@ -314,7 +356,7 @@ function mountTerminalSocket(ctx: Context, runtime: WorkspaceRuntime): void {
           rt: runtime,
           fs: runtime.files,
           localFs: runtime.localFiles,
-          trustedHosts: () => face.webRuntime.trustedHosts,
+          trustedHosts: trustedHosts,
           maxUploadBytes: runtime.config.maxUploadMegabytes * 1024 * 1024
         })
       }),
@@ -331,7 +373,7 @@ function mountTerminalSocket(ctx: Context, runtime: WorkspaceRuntime): void {
           updater: runtime.updater,
           dir: path.join(pluginRoot(), 'updates'),
           log: runtime.log,
-          trustedHosts: () => face.webRuntime.trustedHosts
+          trustedHosts: trustedHosts
         })
       }),
     'dsh-workspace: update upload route'
@@ -345,7 +387,7 @@ function mountTerminalSocket(ctx: Context, runtime: WorkspaceRuntime): void {
         face.webServer.register({
           kind: 'prefix',
           path: ASSETS_PREFIX,
-          handler: createAssetsHandler(assetsDir, () => face.webRuntime.trustedHosts)
+          handler: createAssetsHandler(assetsDir, trustedHosts)
         }),
       'dsh-workspace: static assets'
     )
@@ -358,7 +400,7 @@ function mountTerminalSocket(ctx: Context, runtime: WorkspaceRuntime): void {
         path: PREVIEW_PREFIX,
         handler: createPreviewHandler({
           grants: runtime.previews,
-          trustedHosts: () => face.webRuntime.trustedHosts,
+          trustedHosts: trustedHosts,
           open: async (hostId, remotePath) => {
             const d = await (isLocalId(hostId) ? runtime.localFiles : runtime.files).openDownload(hostId, remotePath)
             return { stream: d.stream, size: d.size }

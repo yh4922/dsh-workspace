@@ -26,6 +26,7 @@ import { realpath } from 'node:fs/promises'
 import { LOCAL_ANY_ID, LocalFs, sessionOfLocalId, type LocalScope } from './local/local-fs.js'
 import { LocalGit } from './local/local-git.js'
 import type { HostInternal } from './host-internal/index.js'
+import { MemoryRuntime } from './memory/runtime.js'
 
 /** 插件运行时配置（与 index.ts 的 Config schema 对应）。 */
 export interface RuntimeConfig {
@@ -72,6 +73,8 @@ export interface WorkspaceRuntime {
   readonly host: HostServices
   /** 插件自更新。 */
   readonly updater: Updater
+  /** 作用域记忆（数据在 ~/.dsh/workspaces/memory）。 */
+  readonly memory: MemoryRuntime
   /** 按 hostId 解析出可连接目标（套用分组继承、展开跳板链、按需解密凭据）。 */
   resolveHost(hostId: string): ResolvedTarget
   /** 释放全部资源（终端、文件会话、连接池、内存中的密钥）。 */
@@ -114,6 +117,8 @@ export interface RuntimeOverrides {
   persistTerminals?: boolean
   /** 测试替身：自动解锁的密钥保护方式（默认 Windows DPAPI）。 */
   keyProtector?: KeyProtector
+  /** 测试用：作用域记忆的数据目录（默认 ~/.dsh/workspaces/memory）。 */
+  memoryRoot?: string
 }
 
 /**
@@ -190,7 +195,7 @@ export function createRuntime(config: RuntimeConfig, overrides: RuntimeOverrides
   })()
   const partial = { config, log, vault, knownHosts, pool, resolveHost, prefs, web, host, updater, bindings, preimages, previews, autoUnlock, autoUnlockReady } as Omit<
     WorkspaceRuntime,
-    'terminals' | 'files' | 'localFiles' | 'localScope' | 'dispose'
+    'terminals' | 'files' | 'localFiles' | 'localScope' | 'dispose' | 'memory'
   >
   const runtime = partial as WorkspaceRuntime
   const terminals = new TerminalRegistry(overrides.shellOpener ?? createSshShellOpener(runtime), log, {
@@ -221,13 +226,16 @@ export function createRuntime(config: RuntimeConfig, overrides: RuntimeOverrides
     }
   }
   const localFiles = new LocalFs(localScope, log, () => prefs.get().ignore)
+  const memory = new MemoryRuntime(runtime, overrides.memoryRoot)
 
   Object.assign(runtime, {
     terminals,
     files,
     localFiles,
     localScope,
+    memory,
     dispose() {
+      memory.dispose()
       // 先关终端与文件会话（它们挂在连接池的连接上），再关连接池。
       terminals.dispose()
       files.dispose()

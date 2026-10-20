@@ -16,6 +16,7 @@ import { closeBridgeDrawer, holdSlotHead, shieldAddWorkspaceClicks, type SlotsPe
 import { loadSidebarPrefs } from './sidebar-prefs.js'
 import { installAppearance } from './appearance.js'
 import { workspaceService } from './sidebar/open-in-sidebar.js'
+import { registerMemoryTab } from './memory/register.js'
 
 export type { DshWorkspaceService, OpenFileOptions, WorkspaceTabKind } from './sidebar/open-in-sidebar.js'
 
@@ -148,6 +149,17 @@ export function apply(ctx: ClientContext): void {
       return undefined
     }
   }, 'dsh-workspace: remote sidebar')
+
+  // 作用域记忆：模块启用时在会话顶部加「记忆」标签。失败只记控制台。
+  ctx.effect(() => {
+    const log = (message: string, error?: unknown): void => console.warn(`[dsh-workspace] ${message}`, error ?? '')
+    try {
+      return registerMemoryTab(ctx, t, api, log)
+    } catch (error) {
+      log('会话「记忆」标签接入失败', error)
+      return undefined
+    }
+  }, 'dsh-workspace: memory tab')
 
   // 接管「添加工作区」：偏好里关闭时不注册，DSH 原来的选择器自然生效。
   // 取不到偏好（宿主未就绪）时按默认开启处理 —— 本机浏览不依赖本插件的宿主端。

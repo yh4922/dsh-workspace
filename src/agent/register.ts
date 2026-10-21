@@ -5,6 +5,7 @@
  *
  * 机制（已用真实 ToolRuntime 验证，见 shadow.test.ts）：
  *   agent/created → 会话 cwd 反查绑定 → 是远程工作区才在该 Agent 的作用域注册同名工具。
+ *   挂载时另补扫一轮已存在的 Agent（宿主 agents.list()）：插件重载后已打开的会话不能丢接管（issue #11）。
  *   注册的定义 = 内置定义（参数、输出 schema、render、界面卡片原样保留）+ 替换后的 execute。
  *   本地会话不接管任何内置工具 → 内置工具的清单与行为与未安装本插件时完全相同。
  *   例外：open_in_sidebar（方案 3.6）本机 / 远程会话都注册（偏好可关），并遮蔽 BS 的 sidebar_open。
@@ -460,6 +461,25 @@ export function mountAgentTools(ctx: Context, deps: AgentToolsDeps): () => void 
     const agent = (payload as { agent?: AgentLike } | undefined)?.agent
     if (agent !== undefined) detach(agent)
   })
+
+  /**
+   * 补扫已存在的 Agent：插件重载（remove+add、升级、热重载）时它们的 agent/created 早已触发过，
+   * 不补扫的话重载前已打开的远程会话会静默退回本机文件工具（issue #11：read /root/x 落到 C:\root\x）。
+   * 与 agent/created 共用 attach（scopes 去重，二者交错也不会重复挂）。
+   */
+  try {
+    const registry = c.get('agents') as { list?: () => unknown[] } | undefined
+    const existing = typeof registry?.list === 'function' ? registry.list() : []
+    for (const agent of existing) {
+      try {
+        attach(agent as AgentLike)
+      } catch (error) {
+        deps.rt.log.error('', 'agent', '为已存在的远程会话补注册 Agent 工具失败', error)
+      }
+    }
+  } catch (error) {
+    deps.rt.log.error('', 'agent', '扫描已存在的 Agent 失败', error)
+  }
 
   return () => {
     offCreated()

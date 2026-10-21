@@ -66,6 +66,8 @@ async function setup(options: {
   hostId?: string
   /** 主机配置变化订阅；不传用测试内的手动通知（notifyHosts）。 */
   subscribeHosts?: (listener: () => void) => () => void
+  /** 挂载前就已存在的 Agent（模拟插件重载）：经宿主 agents 服务的 list() 暴露，不再触发 agent/created。 */
+  preexisting?: Array<{ cwd: 'remote' | 'local'; id: string }>
 }) {
   const ctx = new Context()
   if (options.attachments !== undefined) {
@@ -229,6 +231,20 @@ async function setup(options: {
   const notifyHosts = (): void => {
     for (const l of [...hostListeners]) l()
   }
+  const makeAgent = (cwd: string, id: string, events: unknown[] = []) => {
+    const appended: Array<{ type: string; data: unknown }> = []
+    const agent = {
+      appended,
+      session: { id, header: { cwd }, snapshotEvents: () => events, append: (type: string, data: unknown) => void appended.push({ type, data }) }
+    } as { session: object; ctx?: unknown; appended: Array<{ type: string; data: unknown }> }
+    agent.ctx = createScope(ctx as never, agent, usePreset ? { parent: presetKey } : undefined).ctx
+    return agent
+  }
+  const preexisting = (options.preexisting ?? []).map((p) => makeAgent(p.cwd === 'remote' ? binding.localPath : sandbox, p.id))
+  if (options.preexisting !== undefined) {
+    ctx.provide('agents')
+    ctx.set('agents', { list: () => [...preexisting] })
+  }
   mountAgentTools(ctx as never, {
     rt,
     bindings,
@@ -258,15 +274,6 @@ async function setup(options: {
       : {})
   })
 
-  const makeAgent = (cwd: string, id: string, events: unknown[] = []) => {
-    const appended: Array<{ type: string; data: unknown }> = []
-    const agent = {
-      appended,
-      session: { id, header: { cwd }, snapshotEvents: () => events, append: (type: string, data: unknown) => void appended.push({ type, data }) }
-    } as { session: object; ctx?: unknown; appended: Array<{ type: string; data: unknown }> }
-    agent.ctx = createScope(ctx as never, agent, usePreset ? { parent: presetKey } : undefined).ctx
-    return agent
-  }
   const created = async (agent: object) => {
     ;(ctx as unknown as { emit(e: string, p: unknown): void }).emit('agent/created', { agent, source: 'new' })
     await new Promise((r) => setTimeout(r, 30))
@@ -276,7 +283,7 @@ async function setup(options: {
       content: Array<{ text?: string }>
       isError?: boolean
     }>
-  return { ctx, tools: runtime, backend, binding, makeAgent, created, call, logs, localShellAgents, hostListeners, notifyHosts, builtinPresentCalls, setOpen, openListeners, presetKey: usePreset ? presetKey : undefined }
+  return { ctx, tools: runtime, backend, binding, makeAgent, preexisting, created, call, logs, localShellAgents, hostListeners, notifyHosts, builtinPresentCalls, setOpen, openListeners, presetKey: usePreset ? presetKey : undefined }
 }
 
 describe('远程工具注册（真实 ToolRuntime + 真实先读后写策略）', () => {
@@ -294,6 +301,22 @@ describe('远程工具注册（真实 ToolRuntime + 真实先读后写策略）'
     const l = await s.call(local, 'read', { file_path: 'README.md' })
     expect(l.isError).toBe(true)
     expect(JSON.stringify(l.content)).toContain('LOCAL read must not run')
+  })
+
+  it('【issue #11】挂载前已存在的远程会话（插件重载）也被接管；本地会话不受影响；再收到 agent/created 不重复挂', async () => {
+    const s = await setup({ withBash: true, preexisting: [{ cwd: 'remote', id: 'pre-remote' }, { cwd: 'local', id: 'pre-local' }] })
+    await new Promise((r) => setTimeout(r, 30))
+    const [remote, local] = s.preexisting as [object, object]
+
+    const r = await s.call(remote, 'read', { file_path: 'README.md' })
+    expect(r.isError).not.toBe(true)
+    expect(r.content[0]?.text).toBe('<path>/srv/app/README.md</path>\n1: hello\n2: world')
+    const l = await s.call(local, 'read', { file_path: 'README.md' })
+    expect(JSON.stringify(l.content)).toContain('LOCAL read must not run')
+
+    // 补扫与 agent/created 交错：attach 去重，接管日志只出现一次。
+    await s.created(remote)
+    expect(s.logs.filter((m) => m.includes('远程会话已接管') && m.includes('pre-remote'))).toHaveLength(1)
   })
 
   it('【先读后写】没读过就覆盖已存在文件 → 被真实策略拒绝；读过后才能写', async () => {

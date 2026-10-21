@@ -208,7 +208,8 @@ export interface CandidateDecision {
 
 /** 网关 memory 方法的输入（按 op 分派）。 */
 export type MemoryInput =
-  | { op: 'status' }
+  /** sessionId 给定时待审批数只算与该会话所在工作区相关的条目。 */
+  | { op: 'status'; sessionId?: string }
   | { op: 'overview' }
   | { op: 'settings'; patch: Partial<MemorySettings> }
   | { op: 'models' }

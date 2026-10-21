@@ -13,6 +13,7 @@ import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Translate } from '../context.js'
 import type { WorkspaceApi } from '../api.js'
 import { memoryCaller } from './api.js'
+import { reportMemoryPending } from './pending-bus.js'
 import { AddDialog, CandidateList, EmptyState, EntryList, IconChat, IconFolder, IconGlobe, IconInbox, IconLayers, IconPlus, IconSpark, type MemoryViewEnv } from './views.js'
 import type { MemoryScope, SessionMemoryView } from '../../wire/memory.js'
 
@@ -67,6 +68,8 @@ export function SessionMemoryTab(props: SessionMemoryTabProps) {
       (v) => {
         setView(v)
         setError(null)
+        // 同口径（本工作区相关）的待审批数，直接同步到标签文字
+        reportMemoryPending(sessionId, v.enabled ? v.candidates.length : 0)
         if (!pickedInitial.current) {
           pickedInitial.current = true
           if (v.candidates.length > 0) setColumn('pending')

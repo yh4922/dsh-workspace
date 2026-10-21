@@ -121,6 +121,23 @@ export class MemoryService {
     return out
   }
 
+  /**
+   * 与某会话所在工作区相关的待审批：本会话提出的、指向本项目的、或由本项目其他会话提出的全局候选。
+   * 会话不属于任何项目时只算本会话提出的 —— 其他工作区的候选不该挤进这里的计数。
+   */
+  async candidatesFor(sessionId: string): Promise<MemoryCandidate[]> {
+    const projectId = (await this.deps.scope.ensure(sessionId)).projectId
+    const all = this.deps.store.candidates()
+    if (projectId === null) return all.filter((c) => c.source.sessionId === sessionId)
+    const out: MemoryCandidate[] = []
+    for (const c of all) {
+      const src = c.source.sessionId
+      if (src === sessionId || (c.layer === 'project' && c.projectId === projectId)) out.push(c)
+      else if (c.layer === 'global' && src !== undefined && (await this.deps.scope.ensure(src).catch(() => ({ projectId: null }))).projectId === projectId) out.push(c)
+    }
+    return out
+  }
+
   async sessionView(sessionId: string): Promise<SessionMemoryView> {
     const { store } = this.deps
     const scope = await this.deps.scope.ensure(sessionId)
@@ -132,7 +149,8 @@ export class MemoryService {
       session: store.list({ layer: 'session', sessionId }),
       projectEntries: projectId !== null ? store.list({ layer: 'project', projectId }) : [],
       globalEntries: store.list({ layer: 'global' }),
-      candidates: store.candidates({ sessionId }),
+      // 与标签上的数字同口径：本工作区相关的全部待审批，而不只是本会话提出的
+      candidates: await this.candidatesFor(sessionId),
       summarizing: this.deps.isSummarizing(sessionId)
     }
   }
@@ -181,8 +199,12 @@ export class MemoryService {
   async handle(input: MemoryInput): Promise<MemoryOutputs[MemoryInput['op']]> {
     const { store } = this.deps
     switch (input.op) {
-      case 'status':
-        return { enabled: store.getSettings().enabled, pendingCount: store.candidates().length }
+      case 'status': {
+        const enabled = store.getSettings().enabled
+        // 关闭时不必解析会话所属项目（status 是高频轮询）
+        const pending = input.sessionId === undefined || !enabled ? store.candidates() : await this.candidatesFor(input.sessionId)
+        return { enabled, pendingCount: pending.length }
+      }
       case 'overview':
         return this.overview()
       case 'settings':
@@ -228,7 +250,8 @@ export class MemoryService {
         return { ok: true as const }
       case 'approveAll': {
         let count = 0
-        for (const c of store.candidates(input.sessionId !== undefined ? { sessionId: input.sessionId } : {})) {
+        // 会话里的「全部通过 / 拒绝」作用于该会话看到的那一批（本工作区相关）
+        for (const c of input.sessionId !== undefined ? await this.candidatesFor(input.sessionId) : store.candidates()) {
           try {
             await this.approve({ id: c.id })
             count += 1
@@ -238,8 +261,12 @@ export class MemoryService {
         }
         return { count }
       }
-      case 'rejectAll':
-        return { count: store.rejectAll(input.sessionId !== undefined ? { sessionId: input.sessionId } : {}) }
+      case 'rejectAll': {
+        if (input.sessionId === undefined) return { count: store.rejectAll() }
+        const list = await this.candidatesFor(input.sessionId)
+        for (const c of list) store.reject(c.id)
+        return { count: list.length }
+      }
       case 'search':
         return this.search(input.query)
       case 'suggestTitle':

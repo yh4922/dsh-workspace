@@ -65,6 +65,38 @@ describe('memory 网关往返', () => {
     expect(rt.memory.store.list({ layer: 'session', sessionId: 's1' })).toHaveLength(1)
   })
 
+  it('会话里的待审批数只算本工作区相关的', async () => {
+    rt.host.sessions = {
+      get: (id: string) => {
+        const cwd = { s1: '/nonexistent-dshws/repo', s2: '/nonexistent-dshws/repo', o1: '/nonexistent-dshws/other', l1: '/nonexistent-dshws/loose' }[id]
+        return cwd !== undefined ? { header: { cwd } } : undefined
+      }
+    }
+    rt.memory.refs.workspaceRegistry = {
+      list: () => [
+        { id: 'w1', path: '/nonexistent-dshws/repo', title: 'repo' },
+        { id: 'w2', path: '/nonexistent-dshws/other', title: 'other' }
+      ]
+    }
+    const svc = rt.memory.service
+    await svc.handle({ op: 'settings', patch: { enabled: true } })
+    const { store } = rt.memory
+    store.propose({ layer: 'project', projectId: 'w1', content: '本项目约定', source: { by: 'summarizer', sessionId: 's2' } })
+    store.propose({ layer: 'global', content: '本项目其他会话提出的全局', source: { by: 'summarizer', sessionId: 's2' } })
+    store.propose({ layer: 'project', projectId: 'w2', content: '别的项目', source: { by: 'summarizer', sessionId: 'o1' } })
+    store.propose({ layer: 'global', content: '别的项目提出的全局', source: { by: 'summarizer', sessionId: 'o1' } })
+    store.propose({ layer: 'global', content: '无项目会话提出的', source: { by: 'summarizer', sessionId: 'l1' } })
+
+    expect(await svc.handle({ op: 'status' })).toEqual({ enabled: true, pendingCount: 5 })
+    expect(await svc.handle({ op: 'status', sessionId: 's1' })).toEqual({ enabled: true, pendingCount: 2 })
+    expect((await svc.sessionView('s1')).candidates.map((c) => c.content).sort()).toEqual(['本项目其他会话提出的全局', '本项目约定'])
+    // 不属于任何项目的会话只看自己提出的
+    expect(await svc.handle({ op: 'status', sessionId: 'l1' })).toEqual({ enabled: true, pendingCount: 1 })
+    // 会话里的「全部拒绝」只作用于看到的那一批
+    expect(await svc.handle({ op: 'rejectAll', sessionId: 's1' })).toEqual({ count: 2 })
+    expect(store.candidates()).toHaveLength(3)
+  })
+
   it('手动整理：未启用 / 无模型服务时如实返回原因', async () => {
     const svc = rt.memory.service
     expect(await svc.handle({ op: 'reorganize', sessionId: 's1' })).toEqual({ started: false, reason: '记忆模块未启用。' })

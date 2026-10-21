@@ -223,7 +223,7 @@ function memorySchema() {
     .strict()
   const layer2 = z.enum(['project', 'global'])
   return z.discriminatedUnion('op', [
-    z.object({ op: z.literal('status') }).strict(),
+    z.object({ op: z.literal('status'), sessionId: sid.optional() }).strict(),
     z.object({ op: z.literal('overview') }).strict(),
     z.object({ op: z.literal('settings'), patch: settings }).strict(),
     z.object({ op: z.literal('models') }).strict(),

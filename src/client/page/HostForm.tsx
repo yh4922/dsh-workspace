@@ -58,10 +58,15 @@ export function HostForm(props: HostFormProps) {
   const [envText, setEnvText] = useState(formatEnv(host?.environmentVariables))
   const [notes, setNotes] = useState(host?.notes ?? '')
   const [allowLocalShell, setAllowLocalShell] = useState(host?.allowLocalShell === true)
-  // 打开了本机 shell 的主机默认展开高级区：这是安全相关配置，编辑时要一眼能看到。
+  const [allowLocalFiles, setAllowLocalFiles] = useState(host?.allowLocalFiles === true)
+  // 打开了本机 shell / 本机文件读写的主机默认展开高级区：这是安全相关配置，编辑时要一眼能看到。
   const [showAdvanced, setShowAdvanced] = useState(
     host !== undefined &&
-      (host.startupCommand !== undefined || host.environmentVariables !== undefined || host.notes !== undefined || host.allowLocalShell === true)
+      (host.startupCommand !== undefined ||
+        host.environmentVariables !== undefined ||
+        host.notes !== undefined ||
+        host.allowLocalShell === true ||
+        host.allowLocalFiles === true)
   )
 
   // 编辑时只有动过认证 / 代理区块才发送对应键：「没动 = 不改」，
@@ -107,6 +112,7 @@ export function HostForm(props: HostFormProps) {
       ...(notes.trim() !== '' ? { notes } : {}),
       // 始终发送：关掉时要显式写 false 才能覆盖旧值（服务端按补丁合并）。
       allowLocalShell,
+      allowLocalFiles,
       ...(authInput !== undefined ? { auth: authInput } : {}),
       ...(proxyInput !== undefined ? { proxy: proxyInput } : {})
     }
@@ -323,6 +329,13 @@ export function HostForm(props: HostFormProps) {
                   {t('form.localShellCheck')}
                 </span>
                 {allowLocalShell ? <span className="dshws-set-note">{t('form.localShellOn')}</span> : null}
+              </Field>
+              <Field label={t('form.localFiles')} hint={t('form.localFilesHint')} className="dshws-span-2">
+                <span className="dshws-check">
+                  <input type="checkbox" checked={allowLocalFiles} onChange={(e) => setAllowLocalFiles(e.target.checked)} />
+                  {t('form.localFilesCheck')}
+                </span>
+                {allowLocalFiles ? <span className="dshws-set-note">{t('form.localFilesOn')}</span> : null}
               </Field>
             </div>
           ) : null}

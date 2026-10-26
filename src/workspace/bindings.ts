@@ -430,6 +430,20 @@ function isWindowsAbsolute(p: string): boolean {
   return /^[a-zA-Z]:[\\/]/.test(p) || p.startsWith('\\\\')
 }
 
+/**
+ * 该路径是否指向本机（而不是远程主机）。内置文件工具（read / write / edit / glob / grep）
+ * 按它分发：本机路径且主机开了 allowLocalFiles → 交还宿主内置实现；其余走远程管线。
+ * 判定与 toRemotePath 的 throw 分支逐分支对齐（同一输入不会一边 throw 一边放行）：
+ * - 只有 Windows 盘符 / UNC 写法算本机路径（macOS / Linux 的绝对路径以 / 开头，天然是远程路径）
+ * - 占位目录内的本机路径维持「映射回远程路径」的例外，不算本机
+ */
+export function isLocalHostPath(binding: RemoteBinding, input: string): boolean {
+  if (typeof input !== 'string') return false
+  const raw = input.trim()
+  if (!isWindowsAbsolute(raw)) return false
+  return localRelative(binding.localPath, path.resolve(raw)) === undefined
+}
+
 /** 远程路径相对远程根的显示形式（glob / grep 输出用），不在根下时返回绝对路径。 */
 export function relativeToRoot(binding: RemoteBinding, remote: string): string {
   const root = binding.remotePath.replace(/\/+$/, '') || '/'

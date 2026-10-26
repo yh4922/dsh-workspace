@@ -44,6 +44,12 @@ export interface HostRecord {
    * 明文字段：保险箱上锁时也要能读到（会话挂载工具、保存主机后即时同步都会读）。
    */
   allowLocalShell?: boolean
+  /**
+   * 该主机的远程工作区会话可用内置文件工具（read / write / edit / glob / grep）读写本机文件。
+   * 缺省 = 关闭（本机绝对路径照旧拒绝）。只认 `=== true`，不参与分组继承。
+   * 明文字段：保险箱上锁时也要能读到（会话挂载工具、每次工具调用分发、保存主机后即时同步都会读）。
+   */
+  allowLocalFiles?: boolean
   createdAt: string
   updatedAt: string
 }
@@ -174,6 +180,7 @@ export interface HostView {
   environmentVariables?: Record<string, string>
   notes?: string
   allowLocalShell?: boolean
+  allowLocalFiles?: boolean
   auth: HostAuthView | null
   proxy: HostProxyView | null
   createdAt: string

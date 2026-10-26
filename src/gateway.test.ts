@@ -101,6 +101,8 @@ describe('Typert 清单', () => {
     expect(() => codec?.schema.parse(host())).not.toThrow()
     expect(() => codec?.schema.parse(host({ allowLocalShell: true }))).not.toThrow()
     expect(() => codec?.schema.parse({ ...host(), allowLocalShell: 'true' })).toThrow()
+    expect(() => codec?.schema.parse(host({ allowLocalFiles: true }))).not.toThrow()
+    expect(() => codec?.schema.parse({ ...host(), allowLocalFiles: 'true' })).toThrow()
   })
 })
 
@@ -226,6 +228,22 @@ describe('主机编辑语义', () => {
 
     await gw.saveHost(host({ id: created.id, allowLocalShell: false }))
     expect(rt.vault.getHost(created.id)?.allowLocalShell).toBe(false)
+  })
+
+  it('允许本机文件读写：默认关闭；可开可关（关时显式覆盖旧值）；不传键 = 不改；锁定时也能读到', async () => {
+    const created = await gw.saveHost(host())
+    expect(created.allowLocalFiles).toBeUndefined()
+    expect(rt.vault.getHost(created.id)?.allowLocalFiles).toBeUndefined()
+
+    const on = await gw.saveHost(host({ id: created.id, allowLocalFiles: true }))
+    expect(on.allowLocalFiles).toBe(true)
+    // 旧页面不带这个键（如拖拽改分组）：保持原值。
+    await gw.saveHost(host({ id: created.id, groupPath: 'prod' }))
+    await gw.lock({})
+    expect(rt.vault.getHost(created.id)?.allowLocalFiles).toBe(true)
+
+    await gw.saveHost(host({ id: created.id, allowLocalFiles: false }))
+    expect(rt.vault.getHost(created.id)?.allowLocalFiles).toBe(false)
   })
 })
 

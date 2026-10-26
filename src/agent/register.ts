@@ -387,8 +387,13 @@ export function mountAgentTools(ctx: Context, deps: AgentToolsDeps): () => void 
         tools.register({
           ...builtin,
           execute: async (args: unknown, exec: unknown) => {
+            // 与 wrap 同一条硬校验：会话已不再绑定这个远程工作区时一律拒绝——本机分支也不放行，
+            // 否则「远程会话被改绑 / 工作区被移走」后，本机分支仍能读写这台电脑上的文件。
+            guard(binding, exec as ToolExec)
             const p = localPathOf(args as never)
             if (p !== undefined && isLocalHostPath(binding, p) && safeKeepLocalFiles(deps, binding.hostId)) {
+              // 本机分支留痕：开关打开后每次本机读写都记一条，事后能查「谁在什么时候碰了本机文件」。
+              deps.rt.log.info(binding.hostId, 'agent', `本机文件分支（allowLocalFiles）：${name} ${p}（${agent.session.id ?? '?'}）`)
               return await builtin.execute(args, exec)
             }
             return await run(args as never, exec as ToolExec)
@@ -535,8 +540,9 @@ export function remotePromptText(binding: RemoteBinding | undefined, hostLabel: 
       ]
     : []
   // 文件工具的路径口径随 allowLocalFiles 变化：关 = 一律远程；开 = 本机绝对路径（Windows 盘符 / UNC）走本机。
+  // bash 两态都只在远程执行，必须点明，否则模型容易把它也当成「本机口径」。
   const fileTools = keepLocalFiles
-    ? 'The read, write, edit, glob and grep tools operate on that remote host by default: use POSIX paths (absolute or relative to the workspace root). A Windows absolute path such as C:\\... or \\\\server\\share points to THIS computer and is read / written locally — use it only when the user explicitly asks about files on this computer, and never mix local and remote paths in one call.'
+    ? 'The read, write, edit, glob and grep tools operate on that remote host by default: use POSIX paths (absolute or relative to the workspace root). A Windows absolute path such as C:\\... or \\\\server\\share points to THIS computer and is read / written locally — use it only when the user explicitly asks about files on this computer, and never mix local and remote paths in one call. bash always runs on that remote host; it is unaffected by this rule.'
     : 'The read, write, edit, glob, grep and bash tools operate on that remote host, not on this computer.'
   return [
     `This session's workspace is a remote SSH workspace on ${hostLabel}, rooted at ${binding.remotePath}.`,

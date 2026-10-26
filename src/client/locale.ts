@@ -140,7 +140,7 @@ const zh: Record<string, string> = {
   'form.localFiles': '本机文件读写',
   'form.localFilesCheck': '远程会话可用读/写/编辑/搜索工具直接读写本机文件',
   'form.localFilesHint':
-    '默认关闭，本机路径（如 C:\\…）在远程会话里会被拒绝。打开后，该主机远程会话里的读/写/编辑/全局搜索/内容搜索遇到 Windows 盘符或 UNC 绝对路径时直接读写这台电脑上的文件；相对路径与 / 开头的 POSIX 路径仍作用于服务器。保存后立即生效，已打开的会话从下一轮对话起按新设置。只给信任的主机打开。',
+    '默认关闭，本机路径（如 C:\\…）在远程会话里会被拒绝。打开后，该主机远程会话里的读/写/编辑/全局搜索/内容搜索遇到 Windows 盘符或 UNC 绝对路径时直接读写这台电脑上的文件；相对路径与 / 开头的 POSIX 路径仍作用于服务器。仅 Windows 本机有意义（其他平台没有盘符路径，等于一直关闭）；本机分支走 DSH 内置文件实现，受会话沙箱策略约束——工作区写入模式下，写工作区外的本机文件可能被拒绝。每次本机读写会记一条信息级日志。保存后立即生效，已打开的会话从下一轮对话起按新设置。只给信任的主机打开。',
   'form.localFilesOn': '已开启：该主机的远程会话里，模型可以用文件工具读取和修改这台电脑上的文件，只给信任的主机打开',
   'form.save': '保存',
   'form.saving': '保存中…',
@@ -957,7 +957,7 @@ const en: Record<string, string> = {
   'form.localFiles': 'Local file access',
   'form.localFilesCheck': 'Let remote sessions read / write local files with the file tools',
   'form.localFilesHint':
-    'Off by default: local paths (e.g. C:\\…) are rejected in remote sessions. When on, the read / write / edit / glob / grep tools treat Windows drive or UNC absolute paths as files on THIS computer in this host’s remote sessions; relative paths and POSIX /… paths still operate on the server. Takes effect on save; open sessions follow the new setting from their next turn. Only enable for hosts you trust.',
+    'Off by default: local paths (e.g. C:\\…) are rejected in remote sessions. When on, the read / write / edit / glob / grep tools treat Windows drive or UNC absolute paths as files on THIS computer in this host’s remote sessions; relative paths and POSIX /… paths still operate on the server. Windows only (other platforms have no drive paths, so it stays effectively off); the local branch runs the host’s built-in file tools and is subject to the session sandbox — under workspace-write, writing local files outside the workspace may be refused. Each local read / write logs one info line. Takes effect on save; open sessions follow the new setting from their next turn. Only enable for hosts you trust.',
   'form.localFilesOn': 'On: in this host’s remote sessions, the model can read and modify files on this computer with the file tools. Only enable for hosts you trust.',
   'form.save': 'Save',
   'form.saving': 'Saving…',

@@ -494,6 +494,8 @@ describe('远程工具注册（真实 ToolRuntime + 真实先读后写策略）'
       const r = await s.call(agent, 'read', { file_path: WIN_PATH })
       expect(r.isError).not.toBe(true)
       expect(r.content[0]?.text).toContain('C:\\Users\\me\\note.txt') // 源码转义后即单反斜杠真实路径
+      // 本机分支留痕：每次本机读写记一条 info（工具名 + 路径 + 会话）
+      expect(s.logs.some((m) => m.includes('本机文件分支') && m.includes('read') && m.includes('note.txt'))).toBe(true)
 
       // 占位目录内的 Windows 路径维持「映射回远程」例外，不走本机（placeholder/README.md → /srv/app/README.md）
       const ph = await s.call(agent, 'read', { file_path: path.join(s.binding.localPath, 'README.md') })
@@ -539,6 +541,20 @@ describe('远程工具注册（真实 ToolRuntime + 真实先读后写策略）'
       const r = await s.call(agent, 'read', { file_path: WIN_PATH })
       expect(r.isError).not.toBe(true)
       expect(JSON.stringify(r.content)).toContain('note.txt')
+    })
+
+    it('会话不再绑定该远程工作区：本机分支与远程分支一律拒绝（guard 未被分发逻辑绕过）', async () => {
+      const s = await setup({ withBash: false, keepLocalFiles: () => true })
+      const agent = s.makeAgent(s.binding.localPath, 'remote-files-unbound')
+      await s.created(agent)
+      // 会话被改绑 / 工作区被移走：cwd 不再落在任何绑定里
+      ;(agent as unknown as { session: { header: { cwd: string } } }).session.header.cwd = 'C:\\elsewhere'
+      const local = await s.call(agent, 'read', { file_path: WIN_PATH })
+      expect(local.isError).toBe(true)
+      expect(JSON.stringify(local.content)).toContain('no longer bound')
+      const remote = await s.call(agent, 'read', { file_path: 'README.md' })
+      expect(remote.isError).toBe(true)
+      expect(JSON.stringify(remote.content)).toContain('no longer bound')
     })
 
     it('glob / grep 的可选 path 参数同样按路径分发', async () => {

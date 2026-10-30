@@ -1,6 +1,7 @@
 # dsh-workspace
 
 [![Listed on dsh-plugin.org](https://dsh-plugin.org/badges/listed.svg)](https://dsh-plugin.org/plugins/yh4922/dsh-workspace)
+[![npm](https://img.shields.io/npm/v/@yh4922/dsh-workspace?logo=npm)](https://www.npmjs.com/package/@yh4922/dsh-workspace)
 
 [简体中文](./README.md) | English
 

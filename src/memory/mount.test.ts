@@ -9,7 +9,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { DEFAULT_CONFIG, createRuntime, type WorkspaceRuntime } from '../runtime.js'
-import { memoryPromptText, mountMemoryEvents } from './mount.js'
+import { memoryPromptText, mountMemoryEvents, mountMemoryPrompt } from './mount.js'
 import { executeMemoryTool, MEMORY_TOOL_NAME } from './tool.js'
 
 let dir: string
@@ -74,18 +74,33 @@ describe('提示词', () => {
     store.add({ layer: 'session', sessionId: 's1' }, { content: '目标 X', section: 'goal' }, { by: 'assistant' })
 
     let text = memoryPromptText(rt.memory, agent)
-    expect(text).toContain('## 项目记忆（repo）\n- 接口 code/msg/data')
-    expect(text).toContain('- 用中文')
+    expect(text).toContain('## 项目记忆（repo）\n- [P1] 接口 code/msg/data')
+    expect(text).toContain('- [G1] 用中文')
     expect(text).not.toContain('目标 X')
 
     await ctx.emit('session/event', { id: 's1' }, { type: 'compaction/end', data: {} })
     text = memoryPromptText(rt.memory, agent)
-    expect(text).toContain('## 目标\n- 目标 X')
+    expect(text).toContain('## 目标\n- [S1] 目标 X')
 
     expect(memoryPromptText(rt.memory, fakeAgent('s1', { origin: 'subagent' }))).toBe('')
     store.setSettings({ enabled: false })
     expect(memoryPromptText(rt.memory, agent)).toBe('')
     off()
+  })
+
+  it('记忆段排在 persona 前缀之后、工具规则之前，并关闭宿主插值', () => {
+    const sections: Array<{ order: number; interpolate?: boolean }> = []
+    const orders: Record<string, number> = { DEPLOYMENT_PERSONA_PREFIX: 0, WEB_SURFACE: 10100 }
+    mountMemoryPrompt(
+      {
+        systemPrompt: { section: (s: { order: number; interpolate?: boolean }) => sections.push(s), getSectionOrder: (n: string) => orders[n] as number },
+        effect: () => undefined
+      },
+      rt.memory
+    )
+    expect(sections).toHaveLength(1)
+    expect(sections[0]?.order).toBe(50)
+    expect(sections[0]?.interpolate).toBe(false)
   })
 
   it('子目录会话归入祖先工作区；不属于工作区的会话没有项目记忆', async () => {

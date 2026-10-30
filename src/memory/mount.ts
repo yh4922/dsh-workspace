@@ -24,7 +24,7 @@ interface OnContext {
 }
 
 interface PromptFace {
-  section(section: { name: string; order: number; text: (input: { scope?: unknown }) => string }): unknown
+  section(section: { name: string; order: number; interpolate?: boolean; text: (input: { scope?: unknown }) => string }): unknown
   getSectionOrder(name: string): number
 }
 
@@ -62,17 +62,23 @@ function projectTitle(p: string): string {
   return parts[parts.length - 1] ?? p
 }
 
+/** 记忆段相对 DEPLOYMENT_PERSONA_PREFIX 的偏移：排在身份 / persona 之后、PLAN_POLICY（500）与各工具规则之前。 */
+const MEMORY_ORDER_OFFSET = 50
+
 export function mountMemoryPrompt(ctx: unknown, mem: MemoryRuntime): void {
   const prompt = (ctx as { systemPrompt: PromptFace }).systemPrompt
-  let order = 1000
+  // 放在系统提示词前部而不是末尾（原 WEB_SURFACE+1）：末尾紧跟大段 GenUI / 工具规则之后，遵守度明显偏低
+  let order = MEMORY_ORDER_OFFSET
   try {
-    order = prompt.getSectionOrder('WEB_SURFACE') + 1
+    order = prompt.getSectionOrder('DEPLOYMENT_PERSONA_PREFIX') + MEMORY_ORDER_OFFSET
   } catch {
     /* 宿主未定义该锚点：用默认顺序 */
   }
   const disposer = prompt.section({
     name: MEMORY_SECTION_NAME,
     order,
+    // 记忆是用户原文，可能含 {{x}}（Vue / Handlebars 模板）：关掉宿主插值，原样注入
+    interpolate: false,
     text: ({ scope }) => {
       try {
         return memoryPromptText(mem, scope as AgentLike | undefined)

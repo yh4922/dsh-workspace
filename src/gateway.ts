@@ -997,6 +997,15 @@ export class WorkspaceGateway extends RemoteService {
     return this.guard(() => this.rt.memory.service.handle(input))
   }
 
+  /** 局域网访问（远程访问）：修改类 op 由 LanService 校验本机凭证（经代理的页面只读）。 */
+  lan(input: In<'lan'>): Out<'lan'> {
+    return this.guard(() => {
+      const lan = this.rt.lan
+      if (lan === undefined) throw new RemoteError(ERROR_CODES.failed, '远程访问模块未就绪。', {})
+      return lan.handle(input)
+    })
+  }
+
   /** 远程会话里某文件被改之前的原文（agent/preimages.ts 的基线）；拿不到返回 null，浏览器退回相对 HEAD。 */
   aiChangeBase(input: In<'aiChangeBase'>): Out<'aiChangeBase'> {
     return this.guard(async () => {

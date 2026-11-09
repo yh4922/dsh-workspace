@@ -10,6 +10,7 @@ import { ASSOC_MAX, ASSOC_MODES, ASSOC_VIEWERS, CUSTOM_CSS_MAX, LARGE_FILE_MB_MA
 import { DIR_STAMPS_MAX, OPEN_URL_MAX, OPEN_WITH_MAX, OPEN_WITH_NAME_MAX } from './open-with.js'
 import { TEAM_TASK_ACTIONS } from './tasks.js'
 import { IMPORTANCE, MEMORY_CONTENT_MAX, MEMORY_SECTIONS, MEMORY_TITLE_MAX } from './memory.js'
+import { LAN_FIXED_PASSWORD_MAX, LAN_FIXED_PASSWORD_MIN, LAN_INTERVAL_MAX, LAN_INTERVAL_MIN, LAN_SESSION_DAYS } from './lan.js'
 
 // 编译期保证 dto 的 MethodIO 与 contract 的 METHODS 一一对应，漏一个直接报错。
 type AssertSameKeys<A, B> = [Exclude<keyof A, B>, Exclude<B, keyof A>] extends [never, never]
@@ -191,7 +192,34 @@ const INPUTS: Record<MethodName, z.ZodType> = {
       description: z.string().max(20_000).optional()
     })
     .strict(),
-  memory: memorySchema()
+  memory: memorySchema(),
+  lan: lanSchema()
+}
+
+/** 局域网访问各 op 的输入校验（严格模式）。localKey 是否匹配由 LanService 判断。 */
+function lanSchema() {
+  const key = z.string().min(1).max(200)
+  const patch = z
+    .object({
+      enabled: z.boolean().optional(),
+      host: z.string().trim().min(1).max(100).optional(),
+      port: port.optional(),
+      protocol: z.enum(['http', 'https']).optional(),
+      passwordMode: z.enum(['fixed', 'random']).optional(),
+      randomIntervalMinutes: z.number().int().min(LAN_INTERVAL_MIN).max(LAN_INTERVAL_MAX).optional(),
+      sessionDays: z.number().int().refine((d) => (LAN_SESSION_DAYS as readonly number[]).includes(d), '登录有效期只能是 1 / 7 / 30 天').optional()
+    })
+    .strict()
+  return z.discriminatedUnion('op', [
+    z.object({ op: z.literal('status'), localKey: key.optional() }).strict(),
+    z
+      .object({ op: z.literal('save'), localKey: key, patch, fixedPassword: z.string().min(LAN_FIXED_PASSWORD_MIN).max(LAN_FIXED_PASSWORD_MAX).optional() })
+      .strict(),
+    z.object({ op: z.literal('refreshPassword'), localKey: key }).strict(),
+    z.object({ op: z.literal('kick'), localKey: key, id: z.string().min(1).max(100) }).strict(),
+    z.object({ op: z.literal('kickAll'), localKey: key }).strict(),
+    z.object({ op: z.literal('openGate'), localKey: key }).strict()
+  ])
 }
 
 /** 作用域记忆各 op 的输入校验（严格模式：未知字段直接拒绝）。 */

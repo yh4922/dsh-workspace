@@ -29,6 +29,10 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { mountAgentTools, remotePromptText } from './agent/register.js'
 import { createHostInternal, type ProbeContext } from './host-internal/index.js'
 import { mountMemoryEvents, mountMemoryPrompt } from './memory/mount.js'
+import { LanService, type SettingsFace } from './lan/service.js'
+import { LanStore } from './lan/store.js'
+import { createWhoamiHandler } from './lan/local-route.js'
+import { LAN_WHOAMI_PATH } from './wire/lan.js'
 
 export const name = 'dsh-workspace'
 
@@ -111,6 +115,15 @@ export function trustedHostsOf(ctx: unknown): readonly string[] {
   return []
 }
 
+/** 现取宿主服务；服务不存在时 cordis 可能抛错，统一当作缺席。 */
+function getService(ctx: unknown, name: string): unknown {
+  try {
+    return (ctx as { get(n: string): unknown }).get(name)
+  } catch {
+    return undefined
+  }
+}
+
 export function apply(ctx: Context, config: PluginConfig): void {
   ensurePluginRoot()
   const runtime = createRuntime(config)
@@ -136,6 +149,20 @@ export function apply(ctx: Context, config: PluginConfig): void {
   } catch (cause) {
     log.error('', 'startup', '保险箱加载失败。', cause)
   }
+
+  // 局域网访问（远程访问）：读取配置，上次开着就自动拉起（上游地址等宿主 webServer 就绪后补上）。
+  const lan = new LanService({
+    store: new LanStore(),
+    dir: pluginRoot,
+    log: (level, message) => log[level]('', 'lan', message)
+  })
+  runtime.lan = lan
+  lan.settings = () => getService(ctx, 'settings') as SettingsFace | undefined
+  lan.tokenUrl = (base) => {
+    const connection = getService(ctx, 'connection') as { authenticatedUrl?: (base: string) => string } | undefined
+    return typeof connection?.authenticatedUrl === 'function' ? connection.authenticatedUrl(base) : undefined
+  }
+  ctx.effect(() => () => void lan.dispose(), 'dsh-workspace: lan access')
 
   // 构造即注册 cordis 服务 `dshWorkspace`；清单让 API 网关能分发浏览器的调用。
   new WorkspaceGateway(ctx, runtime)
@@ -413,5 +440,22 @@ function mountTerminalSocket(ctx: Context, runtime: WorkspaceRuntime): void {
       }),
     'dsh-workspace: html preview route'
   )
+  // 局域网访问：代理的上游 = 本机 webServer；whoami 路由给本机页面下发修改配置用的本机凭证。
+  const lan = runtime.lan
+  if (lan !== undefined) {
+    const server = face.webServer as WebServerFace & { port?: number; protocol?: string }
+    ctx.effect(() => {
+      lan.upstream = typeof server.port === 'number' ? { protocol: server.protocol === 'https:' ? 'https:' : 'http:', port: server.port } : undefined
+      lan.onUpstreamChange()
+      return () => {
+        lan.upstream = undefined
+        lan.onUpstreamChange()
+      }
+    }, 'dsh-workspace: lan upstream')
+    ctx.effect(
+      () => face.webServer.register({ kind: 'exact', path: LAN_WHOAMI_PATH, handler: createWhoamiHandler(() => lan.localKey) }),
+      'dsh-workspace: lan whoami route'
+    )
+  }
   runtime.log.info('', 'startup', '终端与文件传输路由挂载完成。')
 }

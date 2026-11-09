@@ -22,6 +22,7 @@ import type { SidebarPrefs, SidebarPrefsPatch } from './sidebar-prefs.js'
 import type { AiChangeBase, AiChangesResult } from './ai-changes.js'
 import type { SubagentLiveResult, TeamTaskCreateInput, TeamTaskMutationResult, TeamTaskUpdateInput, WorkflowRunsResult } from './tasks.js'
 import type { MemoryInput, MemoryOp, MemoryOutputs } from './memory.js'
+import type { LanInput, LanOutput } from './lan.js'
 
 export type { RecentTerminal, TerminalView, ListResult, ReadResult, RemoteEntry, RemoveResult, SearchResult, UpdateStatus, UploadView }
 export type { BetterSidebarStatus, BetterSidebarToggleOutput, SidebarPrefs, SidebarPrefsPatch }
@@ -239,6 +240,8 @@ export interface MethodIO {
   teamsTaskUpdate: [TeamTaskUpdateInput, TeamTaskMutationResult]
   /** 作用域记忆：单方法按 op 分派（输出类型见 MemoryOutputs[op]，浏览器端用 memoryCall 取精确类型）。 */
   memory: [MemoryInput, MemoryOutputs[MemoryOp]]
+  /** 局域网访问（远程访问）：单方法按 op 分派，每个 op 都返回最新状态。 */
+  lan: [LanInput, LanOutput]
 }
 
 export interface LocalListOutput {

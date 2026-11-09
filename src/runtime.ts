@@ -27,6 +27,7 @@ import { LOCAL_ANY_ID, LocalFs, sessionOfLocalId, type LocalScope } from './loca
 import { LocalGit } from './local/local-git.js'
 import type { HostInternal } from './host-internal/index.js'
 import { MemoryRuntime } from './memory/runtime.js'
+import type { LanService } from './lan/service.js'
 
 /** 插件运行时配置（与 index.ts 的 Config schema 对应）。 */
 export interface RuntimeConfig {
@@ -75,6 +76,11 @@ export interface WorkspaceRuntime {
   readonly updater: Updater
   /** 作用域记忆（数据在 ~/.dsh/workspaces/memory）。 */
   readonly memory: MemoryRuntime
+  /**
+   * 局域网访问（远程访问）。由 index.ts 装配：它会读真实配置并可能监听端口，
+   * 不放进 createRuntime，免得测试组装运行时就碰到用户的 lan.json。
+   */
+  lan?: LanService
   /** 按 hostId 解析出可连接目标（套用分组继承、展开跳板链、按需解密凭据）。 */
   resolveHost(hostId: string): ResolvedTarget
   /** 释放全部资源（终端、文件会话、连接池、内存中的密钥）。 */

@@ -1,4 +1,4 @@
-﻿/*
+/*
  * @Description: 页面状态 —— 轮询宿主快照、统一错误路由、暴露操作
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/client/page/useWorkspace.ts
@@ -25,7 +25,9 @@ const READ_ONLY = new Set<MethodName>([
   'getPrefs',
   'editorAsset',
   'updateStatus',
-  'updateCheck'
+  'updateCheck',
+  // 远程访问页 5 秒轮询一次；它的写入也不影响主机 / 终端状态，不必连带刷新整页。
+  'lan'
 ])
 
 export interface HostKeyAlert {

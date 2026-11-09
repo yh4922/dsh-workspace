@@ -130,6 +130,7 @@
     "mermaid": "12.1.0",
     "monaco-editor": "0.57.0",
     "pdf-lib": "1.17.1",
+    "qrcode-generator": "1.4.4",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "tsdown": "^0.22.2",

@@ -5,6 +5,7 @@
  */
 
 import { MEMORY_EN, MEMORY_ZH } from './memory/locale.js'
+import { LAN_EN, LAN_ZH } from './lan/locale.js'
 
 export const NS = 'dsh-workspace'
 
@@ -1630,7 +1631,7 @@ const en: Record<string, string> = {
   'error.generic': 'Failed: {message}'
 }
 
-export const DICTIONARIES = { zh: { ...zh, ...MEMORY_ZH }, en: { ...en, ...MEMORY_EN } }
+export const DICTIONARIES = { zh: { ...zh, ...MEMORY_ZH, ...LAN_ZH }, en: { ...en, ...MEMORY_EN, ...LAN_EN } }
 
 /** 在绑定好的翻译函数外包一层 `{name}` 占位符替换。 */
 export function withVars(raw: (key: string) => string) {

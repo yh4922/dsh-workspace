@@ -168,6 +168,9 @@ importers:
       pdf-lib:
         specifier: 1.17.1
         version: 1.17.1
+      qrcode-generator:
+        specifier: 1.4.4
+        version: 1.4.4
       react:
         specifier: ^18.2.0
         version: 18.3.1
@@ -1605,6 +1608,9 @@ packages:
 
   process-nextick-args@2.0.1:
     resolution: {integrity: sha512-3ouUOpQhtgrbOa17J7+uxOTpITYWaGP7/AhoR3+A+/1e9skrzelGi/dXzEYyvbxubEF6Wn2ypscTKiKJFFn1ag==}
+
+  qrcode-generator@1.4.4:
+    resolution: {integrity: sha512-HM7yY8O2ilqhmULxGMpcHSF1EhJJ9yBj8gvDEuZ6M+KGJ0YY2hKpnXvRD+hZPLrDVck3ExIGhmPtSdcjC+guuw==}
 
   quansync@1.0.0:
     resolution: {integrity: sha512-5xZacEEufv3HSTPQuchrvV6soaiACMFnq1H8wkVioctoH3TRha9Sz66lOxRwPK/qZj7HPiSveih9yAyh98gvqA==}
@@ -3227,6 +3233,8 @@ snapshots:
       source-map-js: 1.2.1
 
   process-nextick-args@2.0.1: {}
+
+  qrcode-generator@1.4.4: {}
 
   quansync@1.0.0: {}
 

@@ -15,7 +15,7 @@ import * as observationPolicy from '@deepseek-ai/dsh-fs-observation-policy'
 import { BindingStore } from '../workspace/bindings.js'
 import { PreimageStore } from './preimages.js'
 import { FakeBackend } from './fake-backend.js'
-import { mountAgentTools, readLimitOf, remotePromptText } from './register.js'
+import { adaptBashValue, bashOutputAcceptsCwd, mountAgentTools, readLimitOf, remotePromptText } from './register.js'
 import { createRuntime, DEFAULT_CONFIG, type WorkspaceRuntime } from '../runtime.js'
 import { WorkspaceGateway } from '../gateway.js'
 
@@ -70,6 +70,8 @@ async function setup(options: {
   subscribeHosts?: (listener: () => void) => () => void
   /** 挂载前就已存在的 Agent（模拟插件重载）：经宿主 agents 服务的 list() 暴露，不再触发 agent/created。 */
   preexisting?: Array<{ cwd: 'remote' | 'local'; id: string }>
+  /** 内置 bash 的 output schema（模拟不同版本宿主，issue #14）；传入时以它注册内置 bash，忽略 withBash。 */
+  bashOutputSchema?: object
 }) {
   const ctx = new Context()
   if (options.attachments !== undefined) {
@@ -165,7 +167,21 @@ async function setup(options: {
     } as never) as never
   )
   tools.register(localTool('pwsh', { command: { type: 'string', required: true } }) as never)
-  if (options.withBash) tools.register(localTool('bash', { command: { type: 'string', required: true }, description: { type: 'string', required: true } }) as never)
+  if (options.bashOutputSchema !== undefined) {
+    tools.register(
+      defineTool({
+        name: 'bash',
+        description: 'local bash',
+        parameters: { command: { type: 'string', required: true }, description: { type: 'string', required: true } },
+        output: { schema: options.bashOutputSchema, render: (_a: unknown, v: { stdout: { text: string } }) => [{ type: 'text', text: v.stdout.text }] },
+        execute: async () => {
+          throw new Error('LOCAL bash must not run for remote sessions')
+        }
+      } as never) as never
+    )
+  } else if (options.withBash) {
+    tools.register(localTool('bash', { command: { type: 'string', required: true }, description: { type: 'string', required: true } }) as never)
+  }
   const builtinPresentCalls: unknown[] = []
   if (options.withPresent === true) {
     const pending = new WeakMap<object, { session: { append(t: string, d: unknown): void }; files: unknown[] }>()
@@ -374,6 +390,67 @@ describe('远程工具注册（真实 ToolRuntime + 真实先读后写策略）'
     const pick = (scope: unknown) => s.tools.schemas(scope as never).find((t: { name: string }) => t.name === 'read')
     expect(pick(remote)).toBeDefined()
     expect(pick(remote)).toEqual(pick(local))
+  })
+
+  describe('【issue #14】远程 bash 的前台结果按宿主 schema 决定是否带 cwd', () => {
+    const stream = {
+      type: 'object',
+      additionalProperties: false,
+      required: true,
+      properties: { text: { type: 'string', required: true }, truncated: { type: 'boolean', required: true } }
+    }
+    const nullable = (type: string) => ({ required: true, oneOf: [{ type }, { type: 'null' }] })
+    const foregroundProps = {
+      kind: { type: 'string', required: true, const: 'foreground' },
+      exitCode: nullable('integer'),
+      signal: nullable('string'),
+      timedOut: { type: 'boolean', required: true },
+      aborted: { type: 'boolean', required: true },
+      timeoutMs: { type: 'number', required: true },
+      stdout: stream,
+      stderr: stream
+    }
+    // DSH 0.2.1-rc.2 起：顶层 oneOf，foreground 分支 cwd 必填（形状照 dsh-tool-bash 0.2.1-rc.5 精简）。
+    const rc = {
+      oneOf: [
+        { type: 'object', additionalProperties: false, properties: { kind: { type: 'string', required: true, const: 'background' }, jobId: { type: 'string', required: true } } },
+        { type: 'object', additionalProperties: false, properties: { ...foregroundProps, cwd: { type: 'string', required: true } } }
+      ]
+    }
+    // DSH 0.2.0 及更早：只有 foreground 结构，禁止多余字段，没有 cwd。
+    const legacy = { type: 'object', additionalProperties: false, properties: foregroundProps }
+
+    it('0.2.1 宿主（cwd 必填）：调用成功，不再报 oneOf matched 0', async () => {
+      const s = await setup({ withBash: true, bashOutputSchema: rc })
+      const remote = s.makeAgent(s.binding.localPath, 'remote-b1')
+      await s.created(remote)
+      s.backend.responder = () => ({ stdout: 'ok\n' })
+      const out = await s.call(remote, 'bash', { command: 'hostname', description: 'Show host' })
+      expect(out.isError, JSON.stringify(out.content)).not.toBe(true)
+      expect(out.content[0]?.text).toBe('ok\n')
+    })
+
+    it('0.2.0 宿主（禁止多余字段）：不带 cwd，调用照常成功', async () => {
+      const s = await setup({ withBash: true, bashOutputSchema: legacy })
+      const remote = s.makeAgent(s.binding.localPath, 'remote-b2')
+      await s.created(remote)
+      s.backend.responder = () => ({ stdout: 'ok\n' })
+      const out = await s.call(remote, 'bash', { command: 'hostname', description: 'Show host' })
+      expect(out.isError, JSON.stringify(out.content)).not.toBe(true)
+      expect(out.content[0]?.text).toBe('ok\n')
+    })
+
+    it('bashOutputAcceptsCwd / adaptBashValue 判定', () => {
+      const def = (schema?: object) => ({ name: 'bash', execute: async () => undefined, ...(schema === undefined ? {} : { output: { schema } }) })
+      expect(bashOutputAcceptsCwd(def(rc))).toBe(true)
+      expect(bashOutputAcceptsCwd(def(legacy))).toBe(false)
+      expect(bashOutputAcceptsCwd(def({ ...legacy, additionalProperties: true }))).toBe(true)
+      expect(bashOutputAcceptsCwd(def())).toBe(true)
+      expect(bashOutputAcceptsCwd(def({ oneOf: [{ properties: { kind: { const: 'background' } } }] }))).toBe(false)
+      const value = { kind: 'foreground' as const, cwd: '/srv', exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 1, stdout: { text: '', truncated: false }, stderr: { text: '', truncated: false } }
+      expect(adaptBashValue(value, true)).toHaveProperty('cwd', '/srv')
+      expect(adaptBashValue(value, false)).not.toHaveProperty('cwd')
+    })
   })
 
   it('内置工具在全局层（旧版宿主布局）时同样能接管', async () => {

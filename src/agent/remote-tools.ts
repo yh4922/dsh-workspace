@@ -532,6 +532,11 @@ export interface BashArgs {
 
 export interface BashValue {
   kind: 'foreground'
+  /**
+   * 实际执行目录（远程 POSIX 路径）。DSH 0.2.1-rc.2 起内置 bash 的前台结果要求它（issue #14）；
+   * 0.2.0 及更早的宿主 schema 没有这个字段且禁止多余字段 —— 包装内置定义时按宿主 schema 决定是否保留（见 register.ts）。
+   */
+  cwd?: string
   exitCode: number | null
   signal: string | null
   timedOut: boolean
@@ -567,6 +572,7 @@ export async function remoteBash(env: RemoteToolEnv, args: BashArgs, exec: ToolE
   if (run.aborted) throw new Error('aborted')
   return {
     kind: 'foreground',
+    cwd,
     exitCode: run.code,
     signal: run.signal,
     timedOut: run.timedOut,

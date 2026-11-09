@@ -217,7 +217,7 @@ describe('bash', () => {
     backend.responder = () => ({ stdout: 'hi\n', stderr: 'warn\n', code: 3 })
     const v = await remoteBash(env, { command: 'echo hi', description: 'Say hi', workdir: 'src' }, exec)
     expect(backend.commands.at(-1)?.options.cwd).toBe('/srv/app/src')
-    expect(v).toMatchObject({ kind: 'foreground', exitCode: 3, timedOut: false, timeoutMs: 120000 })
+    expect(v).toMatchObject({ kind: 'foreground', cwd: '/srv/app/src', exitCode: 3, timedOut: false, timeoutMs: 120000 })
     expect(renderBash(v)).toBe('hi\n[stderr]\nwarn\n[exit code: 3]')
   })
 

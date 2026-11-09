@@ -116,6 +116,37 @@ export function readLimitOf(builtin: ToolDefinitionLike | undefined): number {
   return Number.isInteger(n) && n > 0 ? n : 2000
 }
 
+interface SchemaNode {
+  oneOf?: unknown
+  additionalProperties?: unknown
+  properties?: Record<string, { const?: unknown } | undefined>
+}
+
+/**
+ * 宿主内置 bash 的前台结果是否接受 cwd 字段（issue #14）。
+ *
+ * - DSH 0.2.1-rc.2 起：output.schema 顶层 oneOf（background / promoted / foreground），foreground 分支 cwd 必填；
+ *   不带 cwd 三个分支全不匹配 → 「matched 0」，命令实际执行了但结果被丢弃。
+ * - DSH 0.2.0 及更早：foreground 结构 additionalProperties: false 且没有 cwd，带上反而校验失败。
+ * 所以不能无条件加或不加，只能读宿主声明的 schema 决定。找不到 schema（宿主不校验）时保留：多余字段无害，
+ * 内置 render 的 presentationMeta 还会读它；找到了却认不出 foreground 分支时不加，退回旧行为。
+ */
+export function bashOutputAcceptsCwd(builtin: ToolDefinitionLike | undefined): boolean {
+  const schema = (builtin?.output as { schema?: SchemaNode } | undefined)?.schema
+  if (schema === undefined || schema === null || typeof schema !== 'object') return true
+  const branches = (Array.isArray(schema.oneOf) ? schema.oneOf : [schema]) as SchemaNode[]
+  const foreground = branches.find((b) => b?.properties?.kind?.const === 'foreground')
+  if (foreground === undefined) return false
+  return foreground.properties?.cwd !== undefined || foreground.additionalProperties !== false
+}
+
+/** 按宿主 schema 裁剪远程 bash 的前台结果：宿主不接受 cwd 时去掉它（其余字段两代宿主一致）。 */
+export function adaptBashValue(value: BashValue, keepCwd: boolean): BashValue {
+  if (keepCwd) return value
+  const { cwd: _cwd, ...rest } = value
+  return rest
+}
+
 /**
  * 挂载 Agent 工具。返回清理函数（插件卸载时释放所有作用域注册）。
  */
@@ -410,7 +441,9 @@ export function mountAgentTools(ctx: Context, deps: AgentToolsDeps): () => void 
       step('glob', () => wrapWithLocalFiles('glob', searchPathOf, (args, exec) => remoteGlob(env, args, exec)))
       step('grep', () => wrapWithLocalFiles('grep', searchPathOf, (args, exec) => remoteGrep(env, args, exec)))
       step('bash', () => {
-        if (wrap('bash', (args, exec) => remoteBash(env, args, exec))) return true
+        // 包装内置定义 = 沿用宿主的 output schema 校验结果，前台结果是否带 cwd 必须跟随宿主版本（issue #14）。
+        const keepCwd = bashOutputAcceptsCwd(builtinOf('bash'))
+        if (wrap('bash', async (args, exec) => adaptBashValue(await remoteBash(env, args, exec), keepCwd))) return true
         if (deps.defineTool === undefined) return false
         tools.register(deps.defineTool(remoteBashDefinition(binding, env, guard)))
         return true
@@ -599,6 +632,8 @@ function remoteBashDefinition(binding: RemoteBinding, env: RemoteToolEnv, guard:
         additionalProperties: false,
         properties: {
           kind: { type: 'string', required: true, const: 'foreground' },
+          // 与 DSH 0.2.1 起内置 bash 的前台结果一致（issue #14）；本定义由插件自己声明，不受宿主版本影响。
+          cwd: { type: 'string', required: true },
           exitCode: { required: true, oneOf: [{ type: 'integer' }, { type: 'null' }] },
           signal: { required: true, oneOf: [{ type: 'string' }, { type: 'null' }] },
           timedOut: { type: 'boolean', required: true },

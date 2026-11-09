@@ -231,8 +231,31 @@ export class BindingStore {
    * 但收编末级前要确认它下面没有别的远程工作区（防大小写变体抢走子工作区的父目录）。
    */
   private availableDir(input: { hostId: string; endpoint: string; remotePath: string }): string {
-    const root = path.join(remoteWorkspacesRoot(), safeSegment(input.endpoint))
+    const root = path.join(remoteWorkspacesRoot(), this.anchorOf(input.hostId) ?? safeSegment(input.endpoint))
     return this.walkAvailable(input, root, remotePathSegments(input.remotePath))
+  }
+
+  /**
+   * 该主机已在用的占位根目录名（remote/ 下的第一级），没有登记时返回 undefined（按当前地址新生成）。
+   *
+   * endpoint 由 hostname-username-port 拼成，是可变字段：主机改地址后若按新地址生成占位根，
+   * 同一主机的新旧工作区会落进两棵不相交的树，「按工作区树」分组从此挂不进原父工作区（issue #15）。
+   * 所以占位根一经确定就跟随 hostId 沿用，不再随地址变化；代价是改地址后磁盘目录名仍是旧地址（只是锚点，不影响连接）。
+   * 已经分叉的（旧版本留下两个根）取最早创建的登记所在的根 —— 父工作区通常建得最早；不迁移、不改动任何已有目录。
+   */
+  private anchorOf(hostId: string): string | undefined {
+    const root = remoteWorkspacesRoot()
+    const owned = this.list()
+      .filter((b) => b.hostId === hostId && existsSync(b.localPath))
+      .sort((a, b) => String(a.createdAt ?? '').localeCompare(String(b.createdAt ?? '')) || a.localPath.localeCompare(b.localPath))
+    for (const b of owned) {
+      // path.relative 在 Windows 上不区分大小写，且保留登记里的原始写法（目录名大小写照旧）。
+      const rel = path.relative(root, b.localPath)
+      if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) continue // 不在占位根下（如 DSH_HOME 迁移前的旧登记）
+      const first = rel.split(path.sep)[0]
+      if (first !== undefined && first !== '') return first
+    }
+    return undefined
   }
 
   /** availableDir 的递归体：从 startDir 起逐级落下 segs，逐级做占据检查与让位。 */

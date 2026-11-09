@@ -98,6 +98,58 @@ describe('BindingStore', () => {
     expect(new BindingStore().resolve(parent.localPath)?.remotePath).toBe('/root')
   })
 
+  describe('【issue #15】主机改地址后占位根跟随 hostId 沿用', () => {
+    it('改地址后新建的子工作区仍挂在原父工作区下，不另起一棵树', () => {
+      const store = new BindingStore()
+      const parent = store.create({ hostId: 'h1', endpoint: 'host-a-root-22', remotePath: '/root', title: 'root' })
+      const child = store.create({ hostId: 'h1', endpoint: 'host-b-root-22', remotePath: '/root/project', title: 'project' })
+      expect(child.localPath).toBe(path.join(parent.localPath, 'project'))
+      expect(existsSync(path.join(remoteWorkspacesRoot(), 'host-b-root-22'))).toBe(false)
+      // 改地址后再次创建原有工作区：幂等返回原登记，不新增。
+      expect(store.create({ hostId: 'h1', endpoint: 'host-b-root-22', remotePath: '/root', title: 'root' }).localPath).toBe(parent.localPath)
+      expect(store.list()).toHaveLength(2)
+    })
+
+    it('没有登记的主机按当前地址生成；别的主机的根不被借用', () => {
+      const store = new BindingStore()
+      store.create({ hostId: 'h1', endpoint: 'host-a-root-22', remotePath: '/root', title: 'root' })
+      const other = store.create({ hostId: 'h2', endpoint: 'host-c-root-22', remotePath: '/root', title: 'root' })
+      expect(other.localPath).toBe(path.join(remoteWorkspacesRoot(), 'host-c-root-22', 'root'))
+    })
+
+    it('旧版本已分叉成两个根：沿用最早创建的登记所在的根', () => {
+      const file = bindingsFile()
+      const root = remoteWorkspacesRoot()
+      const older = path.join(root, 'host-a-root-22', 'root')
+      const newer = path.join(root, 'host-b-root-22', 'srv')
+      for (const d of [older, newer]) mkdirSync(d, { recursive: true })
+      mkdirSync(path.dirname(file), { recursive: true })
+      writeFileSync(
+        file,
+        JSON.stringify({
+          version: 1,
+          bindings: [
+            { localPath: newer, hostId: 'h1', remotePath: '/srv', title: 'srv', createdAt: '2026-11-01T00:00:00.000Z' },
+            { localPath: older, hostId: 'h1', remotePath: '/root', title: 'root', createdAt: '2026-01-01T00:00:00.000Z' }
+          ]
+        }),
+        'utf8'
+      )
+      const store = new BindingStore()
+      const child = store.create({ hostId: 'h1', endpoint: 'host-c-root-22', remotePath: '/root/project', title: 'project' })
+      expect(child.localPath).toBe(path.join(older, 'project'))
+    })
+
+    it('原根下的登记目录都已不存在：按当前地址生成', () => {
+      const store = new BindingStore()
+      const gone = store.create({ hostId: 'h1', endpoint: 'host-a-root-22', remotePath: '/root', title: 'root' })
+      rmSync(path.join(remoteWorkspacesRoot(), 'host-a-root-22'), { recursive: true, force: true })
+      expect(existsSync(gone.localPath)).toBe(false)
+      const fresh = store.create({ hostId: 'h1', endpoint: 'host-b-root-22', remotePath: '/srv', title: 'srv' })
+      expect(fresh.localPath).toBe(path.join(remoteWorkspacesRoot(), 'host-b-root-22', 'srv'))
+    })
+  })
+
   it('远程根用固定段，不与常见的 /root 抢同一个目录', () => {
     const store = new BindingStore()
     const root = store.create({ hostId: 'h1', endpoint: 'ep', remotePath: '/', title: 'root' })

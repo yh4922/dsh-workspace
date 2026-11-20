@@ -1,0 +1,169 @@
+/*
+ * @Description: H5 —— 底部抽屉与各面板样式（VIGIL 控制台风格：浮层 = popover 底 + 强边 + 明显投影；tab = 分段控件）
+ * @Author: YangHeng
+ * @Date: 2026-11-19 17:00:00
+ * @FilePath: /dsh-workspace/src/mobile/sheet/sheet.css
+ *
+ * 由 scripts/build-mobile.mjs 拼接进主 css（theme.css 之后），只用 theme.css 的 token 与 --dsw-* 映射。
+ * 复用组件（.dshws-*）的样式由面板分片运行时注入（src/client/styles.ts），这里只做容器撑满与少量手机适配。
+ */
+
+.m-sheet-root { position: fixed; inset: 0; z-index: 40; pointer-events: none; }
+.m-sheet-mask {
+  position: absolute; inset: 0; background: var(--scrim); pointer-events: auto;
+  animation: m-sheet-fade .2s ease-out;
+}
+.m-sheet {
+  position: absolute; left: 0; right: 0; bottom: 0; pointer-events: auto;
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--popover-bg); color: var(--text);
+  border: 1px solid var(--line-strong); border-bottom: 0; border-radius: var(--radius) var(--radius) 0 0;
+  box-shadow: var(--shadow-pop);
+  padding-bottom: var(--m-safe-bottom);
+  transition: height .22s var(--ease-out);
+  animation: m-sheet-up .24s var(--ease-out);
+}
+.m-sheet[data-dragging="true"] { transition: none; }
+@keyframes m-sheet-up { from { transform: translateY(100%); } to { transform: none; } }
+@keyframes m-sheet-fade { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .m-sheet, .m-sheet-mask { animation: none; transition: none; } }
+
+/* 拖拽区：手柄 + tab 条（整条都可拖） */
+.m-sheet-drag { flex: none; touch-action: none; user-select: none; -webkit-user-select: none; border-bottom: 1px solid var(--line); }
+.m-sheet-grip { position: relative; width: 36px; height: 4px; margin: 8px auto 6px; border-radius: 2px; background: var(--line-strong); }
+.m-sheet-grip::before { content: ""; position: absolute; inset: -10px -24px; } /* 放大点击区 */
+.m-sheet-tabs { display: flex; align-items: center; gap: 6px; padding: 0 6px 8px var(--page-x); }
+.m-sheet-tablist {
+  flex: 1; min-width: 0; display: flex; gap: 1px; padding: 2px;
+  border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2);
+}
+.m-sheet-tab {
+  position: relative; flex: 1; min-width: 0; min-height: 34px; padding: 0 2px; border: 0; border-radius: var(--radius-xs);
+  background: transparent; color: var(--text-muted); font-size: 13px; cursor: pointer; white-space: nowrap;
+}
+.m-sheet-tab::after { content: ""; position: absolute; inset: -4px 0; }
+.m-sheet-tab[data-on="true"] { background: var(--surface); color: var(--accent-text); box-shadow: inset 0 0 0 1px var(--accent-border); font-weight: 500; }
+.m-sheet-close {
+  flex: none; width: 40px; height: 40px; display: grid; place-items: center; padding: 0;
+  border: 0; border-radius: var(--radius); background: transparent; color: var(--text-soft); cursor: pointer;
+}
+.m-sheet-close:active { background: var(--row-press); color: var(--text); }
+
+.m-sheet-body { position: relative; flex: 1; min-height: 0; background: var(--surface); }
+.m-sheet-pane { position: absolute; inset: 0; display: flex; flex-direction: column; }
+.m-sheet-pane[hidden] { display: none; }
+.m-sheet-pane > * { flex: 1; min-height: 0; }
+
+/* 撑满容器：复用组件根节点 .dshws-side 等按父高度布局 */
+.m-sheet-fill { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.m-sheet-fill > * { flex: 1; min-height: 0; }
+.m-sheet-scroll { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 12px var(--page-x) 18px; background: var(--canvas); }
+
+.m-sheet-note { padding: 16px; color: var(--text-soft); font-size: 13px; text-align: center; flex: none; }
+.m-sheet-note[data-tone="error"] {
+  margin: 10px var(--page-x); padding: 8px 10px; text-align: left; color: var(--danger);
+  border: 1px solid var(--danger-border); border-left: 2px solid var(--danger); border-radius: var(--radius); background: var(--danger-soft);
+}
+.m-sheet-link {
+  display: inline-flex; align-items: center; gap: 4px; min-height: 32px; border: 0; background: transparent;
+  color: var(--accent-text); font-size: 13px; padding: 0 6px; cursor: pointer; text-decoration: none; white-space: nowrap;
+}
+
+/* 面包屑 / 返回条 */
+.m-sheet-files { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.m-sheet-crumb {
+  flex: none; display: flex; align-items: center; gap: 6px; min-height: 40px; padding: 0 8px 0 4px;
+  border-bottom: 1px solid var(--line); background: var(--surface-2); font-size: 12px; color: var(--text-soft);
+}
+.m-sheet-crumb-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 500 11.5px var(--font-mono); }
+
+/* 表单 / 按钮 / 列表行 */
+.m-sheet-form { display: flex; flex-direction: column; gap: 10px; padding: 16px var(--page-x); }
+.m-sheet-input {
+  min-width: 0; height: 40px; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--field); color: var(--text); font: 16px var(--font-sans); outline: none;
+}
+.m-sheet-input:focus { border-color: var(--accent-fill); box-shadow: 0 0 0 3px var(--accent-soft); }
+.m-sheet-btn {
+  flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 40px; padding: 0 14px;
+  border: 1px solid var(--line-strong); border-radius: var(--radius);
+  background: var(--surface); color: var(--text); font-size: 13.5px; font-weight: 500; cursor: pointer;
+}
+.m-sheet-btn:active { background: var(--surface-3); }
+.m-sheet-btn[data-primary="true"] { background: var(--accent-fill); border-color: var(--accent-fill); color: var(--accent-on); }
+.m-sheet-btn[data-primary="true"]:active { background: var(--accent-press); }
+.m-sheet-btn:disabled { opacity: .42; cursor: default; }
+.m-sheet-row {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; min-height: 56px;
+  margin: 0; padding: 9px 12px; border: 0; border-bottom: 1px solid var(--hairline);
+  background: var(--surface); text-align: left; cursor: pointer;
+}
+.m-sheet-row:first-child { border-top: 1px solid var(--hairline); }
+.m-sheet-row:active { background: var(--row-press); }
+.m-sheet-row small { color: var(--text-soft); font: 500 11.5px var(--font-mono); }
+
+/* SSH：终端 + 快捷键条（键帽：等宽 + 方角 + 底部加深一档） */
+.m-sheet-term { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.m-sheet-term .dshws-term { height: 100%; }
+.m-sheet-keys {
+  flex: none; display: flex; gap: 6px; padding: 6px 8px; overflow-x: auto;
+  border-top: 1px solid var(--line); background: var(--surface-2); scrollbar-width: none;
+}
+.m-sheet-keys::-webkit-scrollbar { display: none; }
+.m-sheet-key {
+  flex: none; min-width: 42px; height: 38px; display: grid; place-items: center; padding: 0 10px;
+  border: 1px solid var(--line-strong); border-bottom-width: 2px; border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--text); font: 500 13px/1 var(--font-mono); cursor: pointer;
+  touch-action: manipulation;
+}
+.m-sheet-key:active { background: var(--accent-soft); border-color: var(--accent-border); }
+.m-sheet-key[data-on="true"] { background: var(--accent-fill); border-color: var(--accent-press); color: var(--accent-on); }
+
+/* 上下文：面板（头 + 体），数字等宽 */
+.m-ctx { display: flex; flex-direction: column; gap: 10px; }
+.m-ctx-card { padding: 0 12px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow); }
+.m-ctx-head {
+  display: flex; align-items: center; gap: 8px; min-height: 44px; margin: 0 -12px 12px; padding: 8px 12px;
+  border-bottom: 1px solid var(--hairline);
+}
+.m-ctx-head b { flex: none; font-size: 14px; font-weight: 600; }
+.m-ctx-head span { margin-left: auto; min-width: 0; color: var(--text-soft); font: 500 12px/1.4 var(--font-mono); text-align: right; }
+.m-ctx-bar { height: 6px; border-radius: 2px; background: var(--surface-3); overflow: hidden; }
+.m-ctx-bar i { display: block; height: 100%; border-radius: 2px; background: var(--ok-dot); transition: width .3s; }
+.m-ctx-bar[data-tone="warn"] i { background: var(--warn); }
+.m-ctx-bar[data-tone="error"] i { background: var(--danger); }
+.m-ctx-sub { margin-top: 8px; color: var(--text-muted); font-size: 12.5px; }
+.m-ctx-sub[data-tone="error"] { color: var(--danger); }
+.m-ctx-actions { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.m-ctx-actions .m-ctx-sub { margin-top: 0; }
+.m-ctx-row { display: flex; align-items: center; gap: 8px; min-height: 34px; font-size: 13.5px; }
+.m-ctx-row + .m-ctx-row { border-top: 1px solid var(--hairline); }
+.m-ctx-row em { margin-left: auto; font-style: normal; color: var(--text); font: 500 12.5px var(--font-mono); }
+.m-ctx-stack { display: flex; height: 8px; margin-bottom: 8px; border-radius: 2px; overflow: hidden; gap: 1px; }
+.m-ctx-stack i { display: block; min-width: 2px; }
+.m-ctx-dot { width: 8px; height: 8px; border-radius: 2px; flex: none; }
+/* 分类色：中性灰阶 + 主色 + 语义色，不引入额外色相 */
+.m-ctx [data-cat="system"] { background: var(--neutral-500); }
+.m-ctx [data-cat="tools"] { background: var(--line-heavy); }
+.m-ctx [data-cat="user"] { background: var(--accent-chart); }
+.m-ctx [data-cat="inject"] { background: var(--accent-fill); }
+.m-ctx [data-cat="skill"] { background: var(--minor); }
+.m-ctx [data-cat="assistant"] { background: var(--ok-dot); }
+.m-ctx [data-cat="tool"] { background: var(--warn); }
+.m-ctx-mem { padding: 9px 0; border-top: 1px solid var(--hairline); font-size: 13.5px; }
+.m-ctx-mem:first-of-type { border-top: 0; padding-top: 0; }
+.m-ctx-mem b { display: block; margin-bottom: 2px; font-weight: 600; }
+.m-ctx-mem p { margin: 0; color: var(--text-muted); line-height: 1.65; white-space: pre-wrap; word-break: break-word; }
+.m-ctx-mem[data-off="true"] { opacity: .5; }
+
+/* 浏览器 */
+.m-sheet-browser { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.m-sheet-urlbar { flex: none; display: flex; gap: 6px; padding: 8px var(--page-x); border-bottom: 1px solid var(--line); background: var(--surface-2); }
+.m-sheet-urlbar .m-sheet-input { flex: 1; font-family: var(--font-mono); font-size: 15px; }
+.m-sheet-urlbar .m-sheet-btn:not([data-primary]) { width: 40px; padding: 0; color: var(--text-muted); }
+.m-sheet-hint {
+  flex: none; display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 6px 0 var(--page-x);
+  color: var(--text-soft); font-size: 12px; border-bottom: 1px solid var(--line); border-left: 2px solid var(--accent-text);
+}
+.m-sheet-hint span { flex: 1; min-width: 0; }
+.m-sheet-frame { flex: 1; min-height: 0; width: 100%; border: 0; background: var(--frame-bg); }

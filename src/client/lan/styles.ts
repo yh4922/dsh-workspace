@@ -42,10 +42,14 @@ export const LAN_CSS = `
 export const H5_CSS = `
 /* ---------- H5：改造宿主外壳 ---------- */
 /* 主区放进第 1 列、左栏移出布局。与 dsh-pocket（另一个手机适配插件）的网格写法一致：
- * 它会把主区强制放进第 1 列（grid-column: 1 !important），若这里把第 1 列设成 0 宽，主区就被压没 —— 会话页一片空白。 */
+ * 它会把主区强制放进第 1 列（grid-column: 1 !important），若这里把第 1 列设成 0 宽，主区就被压没 —— 会话页一片空白。
+ * 定位不能用 :first-child / :nth-child(2)：视口 <768 时宿主进入抽屉模式，会在 AppFrame 最前面插入 [data-sidebar-mask]，
+ * 序号整体后移，主区（centerCol）反而落进 0 宽列 —— 手机上会话详情空白的根因。
+ * 改为相对 [data-rightbar-col] 定位：主区恒为它的前一个兄弟、左栏为再前一个，与遮罩是否存在无关。 */
 html[data-dshws-h5] div:has(> [data-rightbar-col]) { grid-template-columns: minmax(0, 1fr) 0 0 !important; }
-html[data-dshws-h5] div:has(> [data-rightbar-col]) > :first-child { display: none !important; }
-html[data-dshws-h5] div:has(> [data-rightbar-col]) > :nth-child(2) { grid-column: 1 !important; grid-row: 1 !important; min-width: 0 !important; }
+html[data-dshws-h5] div:has(> [data-rightbar-col]) > [data-sidebar-mask],
+html[data-dshws-h5] div:has(> [data-rightbar-col]) > :has(+ :has(+ [data-rightbar-col])) { display: none !important; }
+html[data-dshws-h5] div:has(> [data-rightbar-col]) > :has(+ [data-rightbar-col]) { grid-column: 1 !important; grid-row: 1 !important; min-width: 0 !important; }
 html[data-dshws-h5] div:has(> [data-rightbar-col]) > [data-side="sidebar"] { display: none !important; }
 /* dsh-pocket 的左上角悬浮按钮 / 遮罩 / 会话头「目录」按钮都是打开左侧抽屉用的，H5 外壳下左栏已由工作区 / 会话列表替代，点了只会弹键盘没反应：让位隐藏。 */
 html[data-dshws-h5] [data-mobile-nav="fab"],
@@ -55,8 +59,8 @@ html[data-dshws-h5] [data-conversation-tabs] { display: none !important; }
 /* 状态栏 / 刘海让位（与 dsh-pocket 一致；没装 pocket 时也需要）。 */
 html[data-dshws-h5] div:has(> [data-rightbar-col]) { padding-top: env(safe-area-inset-top, 0px) !important; }
 /* 会话页：宿主会话头整个隐藏（只限主区，右栏里的侧边对话不受影响），主区下移让出自建 AppBar 的高度。 */
-html[data-dshws-h5="session"] div:has(> [data-rightbar-col]) > :nth-child(2) header:has([data-conversation-header-leading]) { display: none !important; }
-html[data-dshws-h5="session"] div:has(> [data-rightbar-col]) > :nth-child(2) { padding-top: 48px !important; box-sizing: border-box !important; }
+html[data-dshws-h5="session"] div:has(> [data-rightbar-col]) > :has(+ [data-rightbar-col]) header:has([data-conversation-header-leading]) { display: none !important; }
+html[data-dshws-h5="session"] div:has(> [data-rightbar-col]) > :has(+ [data-rightbar-col]) { padding-top: 48px !important; box-sizing: border-box !important; }
 
 /* ---------- H5：切页滑动动画 ---------- */
 @keyframes dshws-h5-in-right { from { transform: translateX(100%); } to { transform: none; } }
@@ -64,9 +68,9 @@ html[data-dshws-h5="session"] div:has(> [data-rightbar-col]) > :nth-child(2) { p
 .dshws-h5-page[data-anim="forward"], .dshws-h5-appbar[data-anim="forward"] { animation: dshws-h5-in-right .28s cubic-bezier(.2, .8, .2, 1); }
 .dshws-h5-page[data-anim="back"], .dshws-h5-appbar[data-anim="back"] { animation: dshws-h5-in-left .28s cubic-bezier(.2, .8, .2, 1); }
 /* 进入会话：宿主会话主区与 AppBar 一起从右侧滑入（属性从 sessions 变成 session 时选择器开始命中，动画即播放一次）。 */
-html[data-dshws-h5="session"] div:has(> [data-rightbar-col]) > :nth-child(2) { animation: dshws-h5-in-right .28s cubic-bezier(.2, .8, .2, 1); }
+html[data-dshws-h5="session"] div:has(> [data-rightbar-col]) > :has(+ [data-rightbar-col]) { animation: dshws-h5-in-right .28s cubic-bezier(.2, .8, .2, 1); }
 @media (prefers-reduced-motion: reduce) {
-  .dshws-h5-page, .dshws-h5-appbar, html[data-dshws-h5="session"] div:has(> [data-rightbar-col]) > :nth-child(2) { animation: none !important; }
+  .dshws-h5-page, .dshws-h5-appbar, html[data-dshws-h5="session"] div:has(> [data-rightbar-col]) > :has(+ [data-rightbar-col]) { animation: none !important; }
 }
 
 /* ---------- H5：一、二级页面 ---------- */

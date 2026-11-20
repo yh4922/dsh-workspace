@@ -29,6 +29,19 @@ export interface TerminalViewProps {
   exited?: boolean
   /** 新开 shell 替换当前终端（由父组件实现：同主机、同标题）。 */
   onRestart?: () => void
+  /** 键盘 / 粘贴输入发往远端前的改写（移动端粘滞 Ctrl 用）；缺省原样发送。 */
+  transformInput?: (data: string) => string
+  /** 终端就绪时交出发送句柄，卸载时回调 null（移动端快捷键条用）。 */
+  onHandle?: (handle: TerminalHandle | null) => void
+}
+
+/** 外部向终端注入输入的句柄。 */
+export interface TerminalHandle {
+  /** 原样发给远端（不经 transformInput）。 */
+  send(data: string): void
+  focus(): void
+  /** 是否处于应用光标键模式（vim / less 等）：方向键序列应为 ESC O x 而非 ESC [ x。 */
+  applicationCursor(): boolean
 }
 
 /** 右键菜单位置（相对视口）。 */
@@ -208,7 +221,15 @@ export function TerminalView(props: TerminalViewProps) {
     }
 
     // 始终发给「当前」连接：重新接入后旧连接已作废。
-    const inputSub = term.onData((data) => linkRef.current?.sendInput(data))
+    const inputSub = term.onData((data) => {
+      const transform = handlersRef.current.transformInput
+      linkRef.current?.sendInput(transform === undefined ? data : transform(data))
+    })
+    handlersRef.current.onHandle?.({
+      send: (data) => linkRef.current?.sendInput(data),
+      focus: () => term.focus(),
+      applicationCursor: () => term.modes.applicationCursorKeysMode
+    })
 
     /** 适配容器尺寸并把行列同步给远端；尺寸未变时不发送。 */
     const syncSize = (): void => {
@@ -245,6 +266,7 @@ export function TerminalView(props: TerminalViewProps) {
       offTheme()
       inputSub.dispose()
       relinkRef.current = () => undefined
+      handlersRef.current.onHandle?.(null)
       // 只断开本视图，不关闭远端终端：刷新或切换页面后仍可接回。
       linkRef.current?.dispose()
       term.dispose()

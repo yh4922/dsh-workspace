@@ -1,0 +1,54 @@
+/*
+ * @Description: H5 会话 —— 提问卡片 / 文件卡片 / 上下文注入行的组件特有样式（通用 .c-card* / .c-opt / .c-fold* 在 chat.css）
+ * @Author: YangHeng
+ * @Date: 2026-11-20 11:20:00
+ * @FilePath: /dsh-workspace/src/mobile/chat/cards.css
+ */
+
+/* ---------------------------------------------------------------- 文件卡片 */
+.c-files { display: flex; flex-direction: column; gap: 6px; margin: 4px 0; }
+.c-files-hd { display: flex; align-items: center; gap: 6px; color: var(--text-soft); font-size: 12.5px; }
+.c-files-hd .m-ic { color: var(--text-dim); }
+.c-filecard-desc { color: var(--text-muted); font-size: 12.5px; line-height: 1.45; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.c-filecard[data-static="true"] { cursor: default; }
+.c-filecard[data-static="true"]:active { background: inherit; }
+/* 用户气泡里的附件卡片：跟随气泡宽度，不再撑满消息列。 */
+.c-user-atts .c-filecard { flex: 1 1 100%; min-width: 0; padding: 8px 10px; }
+
+/* ---------------------------------------------------------------- 提问卡片 */
+/* 分步：右上「问题 n / N」+ 分段进度条（当前 = 主色、已答 = 主色浅、已跳过 = 虚线、未答 = 灰） */
+.c-q-count { margin-left: auto; flex: none; color: var(--text-soft); font-size: 12px; font-weight: 500; }
+.c-q-count b { color: var(--text); font-weight: 600; }
+.c-q-steps { display: flex; gap: 4px; margin-top: 10px; }
+.c-q-step {
+  position: relative; flex: 1; height: 4px; padding: 0; border: 0; border-radius: 2px;
+  background: var(--line); cursor: pointer; transition: background .2s;
+}
+.c-q-step::after { content: ""; position: absolute; inset: -12px 0; } /* 4px 细条，触控热区补到 28px */
+.c-q-step[data-state="done"] { background: var(--accent-border); }
+.c-q-step[data-state="skipped"] { background: repeating-linear-gradient(90deg, var(--line-heavy) 0 4px, transparent 4px 7px); }
+.c-q-step[data-state="current"] { background: var(--accent-fill); }
+.c-q { padding-top: 10px; }
+.c-q[data-dir="next"] { animation: c-q-in-next .2s var(--ease-out); }
+.c-q[data-dir="prev"] { animation: c-q-in-prev .2s var(--ease-out); }
+@keyframes c-q-in-next { from { transform: translateX(16px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes c-q-in-prev { from { transform: translateX(-16px); opacity: 0; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .c-q[data-dir] { animation: none; } }
+.c-q[data-skipped="true"] .c-card-body,
+.c-q[data-skipped="true"] .c-opts { opacity: .45; }
+.c-q-hd { display: flex; align-items: center; gap: 6px; color: var(--text-soft); font-size: 12.5px; }
+.c-q-hd b { color: var(--text); font-weight: 600; }
+.c-q-hd small { color: var(--warn-ink); font: 500 11px var(--font-mono); }
+.c-q-detail {
+  margin: 8px 0 0; padding: 8px 10px; max-height: 180px; overflow: auto; border: 1px solid var(--line);
+  border-radius: var(--radius-sm); background: var(--field); color: var(--text-muted); font: 12px/1.5 var(--font-mono);
+  white-space: pre-wrap; word-break: break-word;
+}
+.c-q .c-card-input { margin-top: 8px; }
+.c-q-foot { display: flex; justify-content: space-between; margin-top: 4px; }
+.c-q-foot .c-link-btn { color: var(--text-soft); }
+
+/* ---------------------------------------------------------------- 上下文注入展开内容 */
+.c-ctx-item + .c-ctx-item { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--hairline); }
+.c-ctx-label { display: block; margin-bottom: 2px; color: var(--text-soft); font: 600 11px var(--font-mono); text-transform: none; }
+.c-ctx-text { margin: 0; color: var(--text-muted); font: 12px/1.5 var(--font-mono); white-space: pre-wrap; word-break: break-word; }

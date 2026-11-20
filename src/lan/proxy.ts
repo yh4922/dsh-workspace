@@ -13,6 +13,7 @@ import { createServer as createHttpsServer } from 'node:https'
 import type { Duplex } from 'node:stream'
 import { LAN_COOKIE, LAN_PROXY_PREFIX, LAN_WHOAMI_PATH, type LanDevice } from '../wire/lan.js'
 import type { LanAuth } from './auth.js'
+import { MOBILE_ENTRY, hasDesktopCookie, isMobileUserAgent } from '../wire/mobile.js'
 import { LAN_PROXY_MARK } from './local-route.js'
 import { loginPage, pickLang } from './login-page.js'
 import { UpstreamAuthError, requestFor, upstreamAuthority, upstreamOrigin, type UpstreamAuth, type UpstreamTarget } from './upstream.js'
@@ -117,8 +118,18 @@ export function crossOrigin(req: IncomingMessage): boolean {
   }
 }
 
-function wantsHtml(req: IncomingMessage): boolean {
+function wantsHtml(req: Pick<IncomingMessage, 'method' | 'headers'>): boolean {
   return req.method === 'GET' && (req.headers['sec-fetch-dest'] === 'document' || String(req.headers.accept ?? '').includes('text/html'))
+}
+
+/**
+ * 手机打开首页时是否改去 H5 独立页面。只拦「GET / 的页面请求」：/api、静态资源、hash 内导航都不受影响；
+ * 带了桌面版偏好 cookie（H5 里点过「切换桌面版」）就放行，避免来回弹。
+ */
+export function shouldRedirectToMobile(req: Pick<IncomingMessage, 'method' | 'headers'>, pathname: string): boolean {
+  if (pathname !== '/' || !wantsHtml(req)) return false
+  if (!isMobileUserAgent(req.headers['user-agent'])) return false
+  return !hasDesktopCookie(req.headers.cookie)
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown, extra: OutgoingHttpHeaders = {}): void {
@@ -273,6 +284,13 @@ export function createLanProxy(options: LanProxyOptions): LanProxy {
     }
     // 代理自己应答：浏览器端据此判断「经代理访问」（启用 H5 外壳、远程访问配置只读）。
     if (pathname === LAN_WHOAMI_PATH) return sendJson(res, 200, { proxied: true })
+    // 放在门禁之后：未登录先去登录页，登录完回到 / 再走这里，H5 不用自己处理登录。
+    if (shouldRedirectToMobile(req, pathname)) {
+      // Vary：同一 URL 按 UA / cookie 给出不同结果，不能被任何缓存复用。
+      res.writeHead(302, { location: MOBILE_ENTRY, 'cache-control': 'no-store', vary: 'User-Agent, Cookie' })
+      res.end()
+      return
+    }
     await forward(req, res)
   }
 

@@ -13,7 +13,7 @@ import type { LanWhoami } from '../wire/lan.js'
 
 export const LAN_PROXY_MARK = 'x-dshws-lan-proxy'
 
-function isLoopbackAddress(address: string | undefined): boolean {
+export function isLoopbackAddress(address: string | undefined): boolean {
   if (address === undefined) return false
   const a = address.startsWith('::ffff:') ? address.slice(7) : address
   return a === '::1' || a.startsWith('127.')

@@ -140,8 +140,8 @@
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('lib',{recursive:true,force:true})\"",
     "gen:css": "node scripts/gen-xterm-css.cjs",
-    "build": "pnpm run clean && pnpm run gen:css && tsc -p tsconfig.build.json && tsdown && node scripts/build-monaco.mjs && node scripts/build-viewers.mjs && node scripts/smoke-client.cjs && node scripts/check-host-resolution.mjs",
-    "bundle": "pnpm run gen:css && tsdown && node scripts/build-monaco.mjs && node scripts/build-viewers.mjs",
+    "build": "pnpm run clean && pnpm run gen:css && tsc -p tsconfig.build.json && tsdown && node scripts/build-monaco.mjs && node scripts/build-viewers.mjs && node scripts/build-mobile.mjs && node scripts/smoke-client.cjs && node scripts/check-host-resolution.mjs",
+    "bundle": "pnpm run gen:css && tsdown && node scripts/build-monaco.mjs && node scripts/build-viewers.mjs && node scripts/build-mobile.mjs",
     "watch": "tsdown --watch",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
@@ -150,6 +150,7 @@
     "check:host": "node scripts/check-host-resolution.mjs",
     "build:monaco": "node scripts/build-monaco.mjs",
     "build:viewers": "node scripts/build-viewers.mjs",
+    "build:mobile": "node scripts/build-mobile.mjs",
     "verify:viewers": "node scripts/verify-viewers-browser.mjs",
     "pack:dev": "node scripts/pack-dev.mjs",
     "release": "node scripts/release.mjs"

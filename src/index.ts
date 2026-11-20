@@ -24,6 +24,8 @@ import { attachSocket, terminalIdFromUrl, type SocketLike } from './terminal/soc
 import { SFTP_HTTP_PREFIX, createSftpHttpHandler } from './sftp/http.js'
 import { ASSETS_PREFIX, createAssetsHandler } from './assets-route.js'
 import { PREVIEW_PREFIX, createPreviewHandler } from './preview-route.js'
+import { MOBILE_PREFIX, createMobileHandler } from './mobile-route.js'
+import { MOBILE_FWD_PREFIX, createForwardHandler } from './mobile-fwd-route.js'
 import { fileURLToPath } from 'node:url'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { mountAgentTools, remotePromptText } from './agent/register.js'
@@ -439,6 +441,33 @@ function mountTerminalSocket(ctx: Context, runtime: WorkspaceRuntime): void {
         })
       }),
     'dsh-workspace: html preview route'
+  )
+  // 移动端 H5 独立页面：只对局域网反代提供（门禁在 handler 内部），资源目录 lib/mobile/ 与本文件同级。
+  let mobileDir: string | undefined
+  try {
+    mobileDir = fileURLToPath(new URL('./mobile/', import.meta.url))
+  } catch (cause) {
+    runtime.log.error('', 'startup', '无法定位移动端页面资源目录，H5 页面将不可用。', cause)
+  }
+  if (mobileDir !== undefined) {
+    const dir = mobileDir
+    ctx.effect(
+      () => face.webServer.register({ kind: 'prefix', path: MOBILE_PREFIX, handler: createMobileHandler(dir, trustedHosts) }),
+      'dsh-workspace: mobile h5 route'
+    )
+  }
+  // H5 浏览器面板的本机端口转发（仅反代可用；拒绝 DSH 自身端口与反代端口，见 mobile-fwd-route.ts）。
+  ctx.effect(
+    () =>
+      face.webServer.register({
+        kind: 'prefix',
+        path: MOBILE_FWD_PREFIX,
+        handler: createForwardHandler({
+          trustedHosts,
+          deniedPorts: () => [face.webServer.port, runtime.lan?.status(false).config.port].filter((p): p is number => typeof p === 'number')
+        })
+      }),
+    'dsh-workspace: mobile h5 port forward'
   )
   // 局域网访问：代理的上游 = 本机 webServer；whoami 路由给本机页面下发修改配置用的本机凭证。
   const lan = runtime.lan

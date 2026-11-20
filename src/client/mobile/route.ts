@@ -7,6 +7,7 @@
  * 宿主没有 URL 路由，导航全在内存里；手机上返回键 / 侧滑返回只认浏览器历史。
  * 所以三级页面用 hash 记在历史里：#/ 工作区列表、#/w/<id> 会话列表、#/s/<id> 会话。
  */
+import { desktopCookieString, hasDesktopCookie } from '../../wire/mobile.js'
 
 export type Route = { level: 'home' } | { level: 'sessions'; workspaceId: string } | { level: 'session'; sessionId: string }
 
@@ -51,7 +52,12 @@ export function directionOf(from: Route, to: Route): Direction {
 
 type Listener = () => void
 
+/**
+ * localStorage 是老偏好；cookie（dshws_desktop）是 H5 独立页面引入的、反代据此决定是否 302 的新偏好。
+ * 两者任一为真都算「要桌面版」：从 H5 独立页面点「切换桌面版」回来的手机不应再被本外壳接管。
+ */
 function readPref(): boolean {
+  if (typeof document !== 'undefined' && hasDesktopCookie(document.cookie)) return true
   try {
     return localStorage.getItem(DESKTOP_PREF) === '1'
   } catch {
@@ -96,6 +102,8 @@ export function createShellStore() {
       } catch {
         /* 隐私模式 */
       }
+      // 同步写 cookie：反代按它决定是否把首页 302 到 H5 独立页面（记忆 30 天）。
+      document.cookie = desktopCookieString(value)
       set({ preferDesktop: value })
     },
     /** 前进到新页面（写入历史，返回键可回退）；replace=true 时只改写当前条目。 */

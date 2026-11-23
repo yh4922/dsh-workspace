@@ -22,8 +22,13 @@ export interface RemoteBinding {
   /** 本地占位目录（绝对路径，创建时的原样写法）。 */
   localPath: string
   hostId: string
-  /** 远程工作区根目录（POSIX 绝对路径）。 */
+  /** 远程工作区根目录（POSIX 绝对路径，SFTP 视角：文件浏览与占位目录名都按它）。 */
   remotePath: string
+  /**
+   * 同一目录在 SSH exec 视角下的写法（issue #17：DSM 等 SFTP 根 ≠ exec 根的主机上二者不同）。
+   * 旧绑定没有，会话接管时按路径映射推算并补写（见 ssh/path-view.ts 的 ensureExecRoot）。
+   */
+  execPath?: string
   title: string
   createdAt: string
 }
@@ -33,8 +38,14 @@ interface MetaFile {
   version: 1
   hostId: string
   remotePath: string
+  execPath?: string
   title: string
   createdAt: string
+}
+
+/** 绑定的 exec 视角根目录（Agent、git、终端用）；未登记时与 remotePath 相同。 */
+export function execRootOf(binding: RemoteBinding): string {
+  return binding.execPath ?? binding.remotePath
 }
 
 /** 占位目录的统一根：与保险箱等数据文件分开放。 */
@@ -130,6 +141,7 @@ export class BindingStore {
         const parsed = JSON.parse(readFileSync(file, 'utf8')) as { bindings?: RemoteBinding[] }
         for (const b of parsed.bindings ?? []) {
           if (typeof b?.localPath === 'string' && typeof b.hostId === 'string' && typeof b.remotePath === 'string') {
+            if (b.execPath !== undefined && typeof b.execPath !== 'string') delete b.execPath
             map.set(pathKey(b.localPath), b)
           }
         }
@@ -187,6 +199,7 @@ export class BindingStore {
         localPath: dir,
         hostId: meta.hostId,
         remotePath: meta.remotePath,
+        ...(typeof meta.execPath === 'string' ? { execPath: meta.execPath } : {}),
         title: typeof meta.title === 'string' ? meta.title : path.basename(dir),
         createdAt: typeof meta.createdAt === 'string' ? meta.createdAt : new Date().toISOString()
       }
@@ -208,7 +221,7 @@ export class BindingStore {
    * （同一远程目录允许多条登记并存；不删旧登记也不动旧目录——已有会话的 cwd 还引用它，
    * 删了登记它们就静默失联）。目录段撞车（不同远程目录消毒后落到同一段）时追加短哈希区分。
    */
-  create(input: { hostId: string; endpoint: string; remotePath: string; title: string }): RemoteBinding {
+  create(input: { hostId: string; endpoint: string; remotePath: string; title: string; execPath?: string }): RemoteBinding {
     const dir = this.availableDir(input)
     const same = this.list().find(
       (b) =>
@@ -217,8 +230,33 @@ export class BindingStore {
         existsSync(b.localPath) &&
         pathKey(b.localPath) === pathKey(dir)
     )
-    if (same !== undefined) return same
+    if (same !== undefined) {
+      // 重新添加同一目录时带来了刚探测到的 exec 根：以它为准（旧登记可能没有或已过时）。
+      if (input.execPath !== undefined && same.execPath !== input.execPath) this.setExecPath(same.localPath, input.execPath)
+      return same
+    }
     return this.freshRegistration(input, dir)
+  }
+
+  /**
+   * 登记 / 更新绑定的 exec 视角根目录（映射表与占位目录里的 meta 一起写，映射表丢失重建后仍保留）。
+   * 与 remotePath 相同时不写字段：前缀为空的主机，绑定文件与旧版本完全一致。
+   */
+  setExecPath(localPath: string, execPath: string): void {
+    const b = this.load().get(pathKey(localPath))
+    if (b === undefined) return
+    if (execPath === b.remotePath) delete b.execPath
+    else b.execPath = execPath
+    this.persist()
+    const metaPath = path.join(b.localPath, WORKSPACE_META_FILE)
+    try {
+      const meta = JSON.parse(readFileSync(metaPath, 'utf8')) as MetaFile
+      if (b.execPath === undefined) delete meta.execPath
+      else meta.execPath = b.execPath
+      writeFileSync(metaPath, JSON.stringify(meta, null, 2), 'utf8')
+    } catch {
+      /* meta 缺失或损坏：映射表已更新，下次接管会话时仍可推算 */
+    }
   }
 
   /**
@@ -343,13 +381,16 @@ export class BindingStore {
   }
 
   /** 在给定目录落位：建目录、写 meta、登记并持久化（create 的共用尾段）。 */
-  private freshRegistration(input: { hostId: string; endpoint: string; remotePath: string; title: string }, dir: string): RemoteBinding {
+  private freshRegistration(input: { hostId: string; endpoint: string; remotePath: string; title: string; execPath?: string }, dir: string): RemoteBinding {
     mkdirSync(dir, { recursive: true })
 
+    // exec 根与 SFTP 根相同时不写字段，前缀为空的主机登记内容与旧版本一致。
+    const execPath = input.execPath !== undefined && input.execPath !== input.remotePath ? { execPath: input.execPath } : {}
     const binding: RemoteBinding = {
       localPath: dir,
       hostId: input.hostId,
       remotePath: input.remotePath,
+      ...execPath,
       title: input.title,
       createdAt: new Date().toISOString()
     }
@@ -358,6 +399,7 @@ export class BindingStore {
       version: 1,
       hostId: binding.hostId,
       remotePath: binding.remotePath,
+      ...execPath,
       title: binding.title,
       createdAt: binding.createdAt
     }

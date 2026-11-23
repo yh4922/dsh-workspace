@@ -4,6 +4,8 @@
  * @Date: 2026-10-12 16:00:00
  * @FilePath: /dsh-workspace/src/client/tabs/menu.tsx
  *
+ * DSH 0.2.2 起宿主改用 contextMenus 服务（target 'tab'）声明菜单动作，菜单换成 primitives 的 Menu，不再有 [data-dockkit-tab-menu] 容器，
+ * 下面自绘的 <button> 失去样式变成原生按钮 —— 所以有该服务时走 toHostActions 交给宿主渲染（见 register.ts），下面的插槽组件只给旧宿主兜底。
  * 插槽 sidebar.right.tab.menu.item（list，会话作用域）：宿主把插件项排在它唯一的「关闭」之后，owner props = { tab, dismiss }，
  * 标准 prop sessionId 是菜单所在会话。执行动作必须 dismiss（菜单是宿主的，只会因自己的动作关闭）。
  * 菜单容器的样式是宿主 CSS Module 的哈希类名，拿不到，所以按宿主 [data-dockkit-tab-menu] [role=menuitem] 的样式自写一份（tabs/styles.ts）。
@@ -169,6 +171,48 @@ export function buildMenuItems(deps: MenuDeps, sessionId: string, tab: TabRecord
   // 只剩分隔线（没有任何可点项）时整体不显示。
   while (items[0]?.separator === true) items.shift()
   return items.some((i) => i.separator !== true) ? items : []
+}
+
+/** 宿主 contextMenus 服务的菜单动作（dsh-client-ui-context-menu，DSH 0.2.2 起）。 */
+export interface HostMenuAction {
+  id: string
+  label: string
+  disabled?: boolean
+  separatorBefore?: boolean
+  run?: () => void
+}
+
+/**
+ * MenuItem[] → 宿主菜单动作：宿主用 primitives 的 Menu 统一渲染，样式与宿主项一致，不用再自绘 <button>。
+ * 分隔线折叠为下一项的 separatorBefore；第一项也带分隔线，与宿主「关闭」组隔开。
+ * 宿主动作没有 title（悬浮提示），禁用原因只能丢掉，禁用态本身仍保留。
+ */
+export function toHostActions(items: readonly MenuItem[], log: MenuDeps['log']): HostMenuAction[] {
+  const actions: HostMenuAction[] = []
+  let separate = true
+  for (const item of items) {
+    if (item.separator === true) {
+      separate = true
+      continue
+    }
+    const run = item.run
+    actions.push({
+      id: item.id,
+      label: item.label ?? item.id,
+      ...(item.disabled === true ? { disabled: true } : {}),
+      ...(separate ? { separatorBefore: true } : {}),
+      run: () => {
+        // 宿主在动作抛错时只弹一个笼统的「失败」提示，这里先记下具体原因
+        try {
+          run?.()
+        } catch (error) {
+          log(`标签菜单「${item.label ?? item.id}」执行失败`, error)
+        }
+      }
+    })
+    separate = false
+  }
+  return actions
 }
 
 /** 降级：没有布局时按 (kind, contentId) 匹配固定项。 */

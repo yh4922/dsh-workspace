@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { LayoutLike, SidebarRightLike, TabRecordLike } from './host-layout.js'
-import { buildMenuItems, fileTargetOf, type MenuDeps } from './menu.js'
+import { buildMenuItems, fileTargetOf, toHostActions, type MenuDeps } from './menu.js'
 import type { PinManager } from './pin-manager.js'
 import { pinKey } from './pins.js'
 
@@ -124,5 +124,31 @@ describe('文件类标签：复制路径与在文件管理中显示', () => {
     const items = buildMenuItems(deps(paneLayout(['a'])), 's1', { id: 'a', kind: FILE, contentId: 'dsh-resource://file/absolute/D:/x.txt' })
     expect(byId(items, 'reveal')).toMatchObject({ disabled: true, title: 'tabmenu.revealUnavailable' })
     expect(byId(items, 'copyPath')?.disabled).toBeUndefined()
+  })
+})
+
+describe('toHostActions', () => {
+  it('分隔线折叠为下一项的 separatorBefore，首项与宿主组隔开，禁用态保留', () => {
+    const actions = toHostActions(
+      [
+        { id: 'closeLeft', label: 'L', disabled: true, title: 'x' },
+        { id: 'closeAll', label: 'A' },
+        { id: 'pin-sep', separator: true },
+        { id: 'pin', label: 'P' }
+      ],
+      () => undefined
+    )
+    expect(actions.map(({ run: _run, ...a }) => a)).toEqual([
+      { id: 'closeLeft', label: 'L', disabled: true, separatorBefore: true },
+      { id: 'closeAll', label: 'A' },
+      { id: 'pin', label: 'P', separatorBefore: true }
+    ])
+  })
+
+  it('动作抛错时记日志而不向宿主抛出', () => {
+    const logs: string[] = []
+    const [action] = toHostActions([{ id: 'x', label: 'X', run: () => { throw new Error('boom') } }], (m) => logs.push(m))
+    expect(() => action!.run!()).not.toThrow()
+    expect(logs).toHaveLength(1)
   })
 })

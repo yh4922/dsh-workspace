@@ -27,7 +27,8 @@ import { fromLocalPosix, isLocalId, localReader, toLocalPosix } from './local/lo
 import { LocalGit } from './local/local-git.js'
 import type { GitRepo } from './git/remote-git.js'
 import type { RemoteFs } from './sftp/remote-fs.js'
-import { toRemotePath } from './workspace/bindings.js'
+import { execRootOf, toRemotePath } from './workspace/bindings.js'
+import { bindingPathView, execFromEither, resolveWorkspaceRoots, sftpFromEither } from './ssh/path-view.js'
 import { REMOTE_MARKER } from './agent/present-tool.js'
 import { BetterSidebarError, betterSidebarSetEnabled, betterSidebarStatus } from './better-sidebar.js'
 import { isAllowedExternalUrl } from './wire/open-with.js'
@@ -537,7 +538,16 @@ export class WorkspaceGateway extends RemoteService {
   // ---------------------------------------------------------------- 文件（SFTP）
 
   sftpHome(input: In<'sftpHome'>): Out<'sftpHome'> {
-    return this.guard(async () => ({ path: await this.fs(input.hostId).home(input.hostId) }))
+    return this.guard(async () => {
+      const home = await this.fs(input.hostId).home(input.hostId)
+      if (isLocalId(input.hostId)) return { path: home }
+      // 顺带告知 SFTP 根在 SSH 里的位置（issue #17），添加工作区弹窗据此提示映射；检测失败不影响浏览。
+      const prefix = await this.rt.paths
+        .view(input.hostId)
+        .then((v) => v.prefix)
+        .catch(() => '')
+      return prefix === '' ? { path: home } : { path: home, execPrefix: prefix }
+    })
   }
 
   sftpList(input: In<'sftpList'>): Out<'sftpList'> {
@@ -735,19 +745,29 @@ export class WorkspaceGateway extends RemoteService {
       if (isLocalId(input.hostId)) return await this.localGit(input)
       const hostId = this.requireHost(input.hostId)
       const root = normalizeRemotePath(input.root)
-      if (!this.rt.bindings.list().some((b) => b.hostId === hostId && b.remotePath === root)) {
+      const binding = this.rt.bindings.list().find((b) => b.hostId === hostId && b.remotePath === root)
+      if (binding === undefined) {
         throw new Error(`不是已登记的远程工作区：${root}`)
       }
-      const rootGit = new RemoteGit(this.rt, hostId, root)
+      // 浏览器传的是 SFTP 视角，git 跑在 exec 里（issue #17）：进出各换一次视角。
+      const view = await this.rt.paths.view(hostId)
+      const execRoot = binding.execPath ?? view.toExec(root)
+      const rootGit = new RemoteGit(this.rt, hostId, execRoot)
       // 在「另一个 git 工作目录」里执行（分支检出在那里）：只允许本仓库自己的工作目录，由 git 列出为准。
       let git: GitRepo = rootGit
-      let where = root
+      let where = execRoot
       if (input.worktree !== undefined && normalizeRemotePath(input.worktree) !== root) {
-        where = normalizeRemotePath(input.worktree)
+        where = execFromEither(view.prefix, normalizeRemotePath(input.worktree))
         if (!(await rootGit.isOwnWorktree(where))) throw new Error(`不是该仓库的工作目录：${where}`)
         git = new RemoteGit(this.rt, hostId, where)
       }
-      return await this.gitOp(git, input, hostId, where)
+      const result = await this.gitOp(git, input, hostId, where)
+      // 分支检出所在目录：换回 SFTP 视角，前端据此列目录 / 打开文件。
+      if (input.op === 'branchInfo') {
+        const info = result as { worktreePath?: string }
+        if (info.worktreePath !== undefined) return { ...info, worktreePath: sftpFromEither(view.prefix, info.worktreePath) }
+      }
+      return result
     })
   }
 
@@ -884,11 +904,14 @@ export class WorkspaceGateway extends RemoteService {
       const binding = this.rt.bindings.resolve(typeof read?.session?.cwd === 'string' ? read.session.cwd : undefined)
       if (binding === undefined) return { remote: null }
       let remotePath: string
+      // 事件里的路径是模型给的 exec 视角，侧栏按 SFTP 视角打开（issue #17）；只凭登记换算，不为此连主机。
+      const view = bindingPathView(binding)
       try {
-        remotePath = toRemotePath(binding, file.path)
+        remotePath = toRemotePath({ ...binding, remotePath: execRootOf(binding) }, file.path)
       } catch {
         return { remote: null }
       }
+      remotePath = sftpFromEither(view.prefix, remotePath)
       // 远程 present 写入的事件带远程标记：以它为准（与分类时的结论一致，含工作区根以外的远程路径）。
       if (file[REMOTE_MARKER] === binding.hostId) return { remote: { hostId: binding.hostId, remotePath } }
       // 没有标记（宿主原实现写的、或旧版本写的）：只有落在远程工作区根内才当远程文件 ——
@@ -1054,7 +1077,13 @@ export class WorkspaceGateway extends RemoteService {
       // 由 git 列出为准，令牌只绑定那个工作目录。
       if (root === undefined) {
         for (const b of bound) {
-          const hit = (await new RemoteGit(this.rt, hostId, b.remotePath).worktreeRoots().catch(() => [])).find((w) => insideRoot(w, target))
+          // git 列出的是 exec 视角，换回 SFTP 视角再与浏览器给的路径比较（issue #17）。
+          const roots = await (async () => {
+            const view = await this.rt.paths.view(hostId)
+            const listed = await new RemoteGit(this.rt, hostId, b.execPath ?? view.toExec(b.remotePath)).worktreeRoots()
+            return listed.map((w) => sftpFromEither(view.prefix, w))
+          })().catch(() => [] as string[])
+          const hit = roots.find((w) => insideRoot(w, target))
           if (hit !== undefined) {
             root = hit
             break
@@ -1069,22 +1098,28 @@ export class WorkspaceGateway extends RemoteService {
   /**
    * 远程工作区：先确认远程目录真实存在（连不上 / 路径错在这里就报，而不是建出一个坏工作区），
    * 再建本地占位目录并登记。DSH 工作区本身由浏览器端用返回的 localPath 创建（与官方流程一致）。
+   * 路径可以是 SFTP 或 SSH 视角（手动输入时用户未必分得清）：统一存 SFTP 视角，并在 exec 里探测登记 exec 视角（issue #17）。
    */
   createRemoteWorkspace(input: In<'createRemoteWorkspace'>): Out<'createRemoteWorkspace'> {
     return this.guard(async () => {
       const hostId = this.requireHost(input.hostId)
       const host = this.rt.vault.getHost(hostId) as HostRecord
-      const remotePath = normalizeRemotePath(input.remotePath)
-      const info = await this.rt.files.statPath(hostId, remotePath)
-      if (info === undefined) throw new Error(`远程目录不存在：${remotePath}`)
-      if (info.type !== 'dir') throw new Error(`不是目录：${remotePath}`)
+      const paths = this.rt.paths
+      const roots = await resolveWorkspaceRoots(normalizeRemotePath(input.remotePath), {
+        view: await paths.view(hostId),
+        statSftp: (p) => this.rt.files.statPath(hostId, p),
+        probeExecDir: (p) => paths.probeDir(hostId, p)
+      })
+      const remotePath = roots.sftpPath
       const binding = this.rt.bindings.create({
         hostId,
         endpoint: [host.hostname, host.username, String(host.port)].filter(Boolean).join('-'),
         remotePath,
+        execPath: roots.execPath,
         title: input.title.trim()
       })
-      this.rt.log.info(hostId, 'workspace', `已创建远程工作区「${binding.title}」→ ${remotePath}（本地占位 ${binding.localPath}）`)
+      const mapped = roots.execPath === remotePath ? '' : `，SSH 路径 ${roots.execPath}`
+      this.rt.log.info(hostId, 'workspace', `已创建远程工作区「${binding.title}」→ ${remotePath}${mapped}（本地占位 ${binding.localPath}）`)
       return { localPath: binding.localPath, title: binding.title }
     })
   }

@@ -14,6 +14,7 @@ import type { SshConnection } from '../ssh/connection.js'
 import { shellQuote } from '../terminal/ssh-shell.js'
 import { execCapture } from './exec.js'
 import { buildMatcher, type IgnoreMatcher } from './ignore.js'
+import { IDENTITY_VIEW, type PathView } from '../ssh/path-view.js'
 
 const posix = path.posix
 
@@ -322,8 +323,16 @@ export class RemoteFs {
     await Promise.all(Array.from({ length: Math.min(LINK_CONCURRENCY, links.length) }, worker))
   }
 
-  /** 该目录下的忽略判定器：默认规则 + 用户规则 + 该目录自己的 .gitignore。 */
-  private async matcherFor(sftp: SftpLike, dir: string): Promise<IgnoreMatcher> {
+  /** 该主机的 SFTP ↔ exec 路径映射；运行时没有映射服务（测试替身）时按两视角一致处理。 */
+  private async pathView(hostId: string): Promise<PathView> {
+    return this.rt.paths === undefined ? IDENTITY_VIEW : await this.rt.paths.view(hostId)
+  }
+
+  /**
+   * 该目录下的忽略判定器：默认规则 + 用户规则 + 该目录自己的 .gitignore。
+   * @param matchBase 锚定规则匹配所用的根写法（交给 exec 里的 find 剪枝时是 exec 视角），默认同 dir
+   */
+  private async matcherFor(sftp: SftpLike, dir: string, matchBase = dir): Promise<IgnoreMatcher> {
     let gitignore: string | undefined
     try {
       const file = dir === '/' ? '/.gitignore' : `${dir}/.gitignore`
@@ -335,7 +344,7 @@ export class RemoteFs {
     } catch {
       /* 没有 .gitignore */
     }
-    return buildMatcher(dir, this.userIgnore(), gitignore)
+    return buildMatcher(matchBase, this.userIgnore(), gitignore)
   }
 
   /**
@@ -540,7 +549,12 @@ export class RemoteFs {
 
     const target = await freeCopyName(sftp, dir, posix.basename(source), typeOfMode(srcAttrs.mode) === 'dir')
     const connection = await this.rt.pool.acquire(hostId, 'file', () => this.rt.resolveHost(hostId))
-    const out = await execCapture(connection, `cp -RPp -- ${shellQuote(source)} ${shellQuote(target)}`, { timeoutMs: 120_000, maxBytes: 64 * 1024 })
+    // cp 跑在 exec 里：SFTP 根不同的主机（issue #17）要换成 exec 视角的写法。
+    const view = await this.pathView(hostId)
+    const out = await execCapture(connection, `cp -RPp -- ${shellQuote(view.toExec(source))} ${shellQuote(view.toExec(target))}`, {
+      timeoutMs: 120_000,
+      maxBytes: 64 * 1024
+    })
     if (out.timedOut) throw new Error(`复制超时（2 分钟），可能仍在远端进行：${source} → ${target}`)
     if (out.code !== 0) throw new Error(`复制失败：${out.stderr.trim() || `退出码 ${String(out.code)}`}`)
     this.rt.log.info(hostId, 'sftp', `已复制 ${source} → ${target}`)
@@ -600,7 +614,10 @@ export class RemoteFs {
     const q = query.trim()
     if (q === '') return { root: base, matches: [], truncated: false, timedOut: false }
     const sftp = await this.sftp(hostId)
-    const matcher = await this.matcherFor(sftp, base)
+    // find 跑在 exec 里：根与剪枝路径用 exec 视角，输出再换回 SFTP 视角（issue #17）。
+    const view = await this.pathView(hostId)
+    const execBase = view.toExec(base)
+    const matcher = await this.matcherFor(sftp, base, execBase)
 
     // 查询词里的 glob 元字符按字面匹配，避免用户输入 * 或 [ 时意外展开。
     const literal = q.replace(/[\\*?[\]]/g, (ch) => `\\${ch}`)
@@ -608,7 +625,7 @@ export class RemoteFs {
     const gnu = await this.supportsPrintf(hostId, connection)
     const args = [
       'find',
-      base,
+      execBase,
       '-mindepth',
       '1',
       '-maxdepth',
@@ -628,12 +645,14 @@ export class RemoteFs {
       if (gnu) {
         if (line.length < 3) continue
         const kind = line[0]
-        const p = line.slice(2)
+        const p = view.toSftp(line.slice(2))
+        if (p === undefined) continue
         if (kind === 'd') matches.push({ path: p, type: 'dir' })
         else if (kind === 'f' || kind === 'l') matches.push({ path: p, type: 'file' })
       } else if (line !== '') {
+        const p = view.toSftp(line)
         // 没有类型信息：先都当文件，点开时前端按实际类型处理。
-        matches.push({ path: line, type: 'file' })
+        if (p !== undefined) matches.push({ path: p, type: 'file' })
       }
     }
     const truncated = matches.length > limit || out.truncated

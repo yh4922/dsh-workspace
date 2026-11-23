@@ -5,6 +5,7 @@
  */
 import type { WorkspaceRuntime } from '../runtime.js'
 import type { OpenShellOptions, ShellChannel, ShellOpener } from './registry.js'
+import { execFromEither } from '../ssh/path-view.js'
 
 /** 环境变量名的合法形式（POSIX）。不合法的名字会被跳过并记日志，而不是拼进命令。 */
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
@@ -81,9 +82,20 @@ export function createSshShellOpener(rt: WorkspaceRuntime): ShellOpener {
       )
     })
 
+    // 浏览器给的 cwd 来自 SFTP 文件浏览 / 工作区登记（SFTP 视角），shell 里要换成 exec 视角（issue #17，群晖 DSM）。
+    // 在这里换算而不是让各端界面各自处理：桌面与移动端的终端都经过这个打开器。映射取不到时按原样 cd。
+    let cwd = options.cwd
+    if (cwd !== undefined && cwd.startsWith('/') && rt.paths !== undefined) {
+      const raw = cwd
+      const prefix = await rt.paths
+        .view(hostId)
+        .then((v) => v.prefix)
+        .catch(() => '')
+      cwd = execFromEither(prefix, raw)
+    }
     const line = buildStartupLine({
       ...(target.environmentVariables !== undefined ? { env: target.environmentVariables } : {}),
-      ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
+      ...(cwd !== undefined ? { cwd } : {}),
       ...(target.startupCommand !== undefined ? { startupCommand: target.startupCommand } : {}),
       onInvalidEnv: (name) =>
         rt.log.warn(hostId, 'terminal', `环境变量名不合法，已跳过：${name}`)

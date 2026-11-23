@@ -8,6 +8,7 @@
  */
 import type { WorkspaceRuntime } from '../runtime.js'
 import { confinedUpload, type ConfinedUploadInput, type ConfinedUploadResult } from '../sftp/confined-upload.js'
+import { IDENTITY_VIEW, type PathView } from '../ssh/path-view.js'
 
 export interface RemoteStat {
   type: 'dir' | 'file' | 'symlink' | 'other'
@@ -103,33 +104,66 @@ class TailBuffer {
   }
 }
 
+/**
+ * 后端对外的路径一律是 exec 视角（与 bash / glob / grep 一致，模型只认一种写法），
+ * 文件读写走 SFTP，需要换成 SFTP 视角（issue #17：DSM 的 SFTP 把 /volume1 当作 /）。
+ */
 export class SshAgentBackend implements AgentBackend {
   constructor(
     private readonly rt: WorkspaceRuntime,
     private readonly hostId: string
   ) {}
 
-  stat(path: string): Promise<RemoteStat | undefined> {
-    return this.rt.files.statPath(this.hostId, path)
+  /** 该主机的路径映射；运行时没有映射服务（测试替身）时按两视角一致处理。 */
+  private async view(): Promise<PathView> {
+    return this.rt.paths === undefined ? IDENTITY_VIEW : await this.rt.paths.view(this.hostId)
   }
 
-  lstat(path: string): Promise<RemoteStat | undefined> {
-    return this.rt.files.lstatPath(this.hostId, path)
+  /** exec 视角 → SFTP 视角；SFTP 看不到的位置明确报错，而不是让 SFTP 在它自己的根下读到同名的别的文件。 */
+  private async sftpPath(execPath: string): Promise<string> {
+    const view = await this.view()
+    const p = view.toSftp(execPath)
+    if (p === undefined) {
+      throw new Error(
+        `"${execPath}" is not reachable through SFTP on this host (its SFTP root is ${view.prefix} for SSH commands); read or change it with bash instead`
+      )
+    }
+    return p
   }
 
-  readBytes(path: string, maxBytes: number): Promise<Buffer> {
-    return this.rt.files.readBytes(this.hostId, path, maxBytes)
+  async stat(path: string): Promise<RemoteStat | undefined> {
+    return await this.rt.files.statPath(this.hostId, await this.sftpPath(path))
+  }
+
+  async lstat(path: string): Promise<RemoteStat | undefined> {
+    return await this.rt.files.lstatPath(this.hostId, await this.sftpPath(path))
+  }
+
+  async readBytes(path: string, maxBytes: number): Promise<Buffer> {
+    return await this.rt.files.readBytes(this.hostId, await this.sftpPath(path), maxBytes)
   }
 
   async writeText(path: string, content: string): Promise<void> {
-    const parent = path.slice(0, path.lastIndexOf('/')) || '/'
+    const target = await this.sftpPath(path)
+    const parent = target.slice(0, target.lastIndexOf('/')) || '/'
     await this.rt.files.mkdirp(this.hostId, parent)
-    await this.rt.files.writeText(this.hostId, path, content, undefined)
+    await this.rt.files.writeText(this.hostId, target, content, undefined)
   }
 
   async upload(input: ConfinedUploadInput): Promise<ConfinedUploadResult> {
+    const view = await this.view()
+    const toExec = (p: string): string => view.toExec(p)
+    const { beforeOverwrite } = input
+    // 受限上传内部全程 SFTP 视角（根、真实路径、家目录判断自洽）；进出时各换一次视角。
+    const result = await confinedUpload(await this.rt.files.sftp(this.hostId), {
+      ...input,
+      root: await this.sftpPath(input.root),
+      ...(beforeOverwrite !== undefined
+        ? { beforeOverwrite: async (t: { path: string; realPath: string }) => await beforeOverwrite({ path: toExec(t.path), realPath: toExec(t.realPath) }) }
+        : {})
+    })
     // 走「file」连接池的 SFTP 会话：大文件上传不拖慢终端与 Agent 的命令通道。
-    return await confinedUpload(await this.rt.files.sftp(this.hostId), input)
+    return { ...result, path: toExec(result.path), requestedPath: toExec(result.requestedPath), realPath: toExec(result.realPath) }
   }
 
   async run(command: string, options: RunOptions): Promise<RunResult> {

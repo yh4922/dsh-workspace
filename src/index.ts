@@ -35,6 +35,7 @@ import { LanService, type SettingsFace } from './lan/service.js'
 import { LanStore } from './lan/store.js'
 import { createWhoamiHandler } from './lan/local-route.js'
 import { LAN_WHOAMI_PATH } from './wire/lan.js'
+import { InstructionsMirror, mountInstructionsMirror } from './workspace/instructions-mirror.js'
 
 export const name = 'dsh-workspace'
 
@@ -269,6 +270,11 @@ export function apply(ctx: Context, config: PluginConfig): void {
     'dsh-workspace: agent tools'
   )
   inject(['systemPrompt'], (sub) => mountRemotePrompt(sub, runtime, localShellAgents))
+  // issue #16：宿主指令加载器只读本机文件，远程会话的项目 AGENTS.md 先镜像进占位目录再交给它读。
+  ctx.effect(() => {
+    const mirror = new InstructionsMirror({ source: runtime.files, log: (hostId, message) => runtime.log.warn(hostId, 'instructions', message) })
+    return mountInstructionsMirror(ctx, { mirror, resolveBinding: (cwd) => runtime.bindings.resolve(cwd) })
+  }, 'dsh-workspace: remote instructions mirror')
 
   // 作用域记忆：可选宿主服务逐个注入（headless 环境可能没有 workspaceRegistry / sessionTitle）。
   const memory = runtime.memory

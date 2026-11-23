@@ -18,6 +18,7 @@ import { prefsFile } from './prefs.js'
 import { buildDescriptors, ERROR_CODES, METHODS, makeCodec } from './wire/contract.js'
 import type { SaveHostInput } from './wire/dto.js'
 import type { ShellChannel } from './terminal/registry.js'
+import { IDENTITY_VIEW, makePathView } from './ssh/path-view.js'
 
 let sandbox: string
 let rt: WorkspaceRuntime
@@ -43,6 +44,9 @@ beforeEach(() => {
   sandbox = mkdtempSync(path.join(tmpdir(), 'dshws-gw-'))
   process.env.DSH_HOME = sandbox
   rt = createRuntime(DEFAULT_CONFIG, { shellOpener: async () => fakeShell(), persistTerminals: false })
+  // 没有真实主机：路径映射按两视角一致处理，exec 探测视为目录存在（issue #17 的场景另有专门用例）。
+  rt.paths.view = async () => IDENTITY_VIEW
+  rt.paths.probeDir = async (_hostId, p) => p
   gw = new WorkspaceGateway(new Context(), rt)
 })
 
@@ -467,6 +471,44 @@ describe('添加工作区（createRemoteWorkspace / setTakeover）', () => {
     expect(rt.bindings.resolve(a.localPath)).toMatchObject({ hostId: saved.id, remotePath: '/home/ps/中山渔业' })
     const again = await gw.createRemoteWorkspace({ hostId: saved.id, remotePath: '/home/ps/中山渔业', title: '渔业' })
     expect(again.localPath).toBe(a.localPath)
+  })
+
+  it('【issue #17】SFTP 根 ≠ exec 根（群晖 DSM）：remotePath 存 SFTP 视角、登记 exec 视角；两种写法输入结果一致', async () => {
+    const saved = await gw.saveHost(host({ hostname: 'nas', username: 'ps', auth: { kind: 'agent' } }))
+    const sftpDirs = new Set(['/AI-agent', '/AI-agent/Home-NAS'])
+    rt.files.statPath = async (_h, p) => (sftpDirs.has(p) ? { type: 'dir', size: 0, mtimeMs: 0 } : undefined)
+    rt.paths.view = async () => makePathView('/volume1')
+    const probed: string[] = []
+    rt.paths.probeDir = async (_h, p) => {
+      probed.push(p)
+      return p.startsWith('/volume1/') ? p : undefined
+    }
+    const a = await gw.createRemoteWorkspace({ hostId: saved.id, remotePath: '/AI-agent/Home-NAS', title: 'nas' })
+    expect(probed[0]).toBe('/volume1/AI-agent/Home-NAS')
+    expect(rt.bindings.resolve(a.localPath)).toMatchObject({ remotePath: '/AI-agent/Home-NAS', execPath: '/volume1/AI-agent/Home-NAS' })
+    // 占位目录名仍按 SFTP 视角展开（与旧版一致）
+    expect(a.localPath.endsWith(path.join('AI-agent', 'Home-NAS'))).toBe(true)
+    expect(a.localPath).not.toContain('volume1')
+    // 手动输入 SSH 视角：归一化回同一个工作区
+    const b = await gw.createRemoteWorkspace({ hostId: saved.id, remotePath: '/volume1/AI-agent/Home-NAS', title: 'nas' })
+    expect(b.localPath).toBe(a.localPath)
+    expect(rt.bindings.list()).toHaveLength(1)
+    // sftpHome 带回映射前缀，弹窗据此提示
+    rt.files.home = async () => '/homes/ps'
+    expect(await gw.sftpHome({ hostId: saved.id })).toEqual({ path: '/homes/ps', execPrefix: '/volume1' })
+  })
+
+  it('【issue #17】SFTP 有该目录但 exec 里进不去 → 明确报错（含尝试过的路径），不登记', async () => {
+    const saved = await gw.saveHost(host({ auth: { kind: 'agent' } }))
+    rt.files.statPath = async () => ({ type: 'dir', size: 0, mtimeMs: 0 })
+    rt.paths.probeDir = async () => undefined
+    try {
+      await gw.createRemoteWorkspace({ hostId: saved.id, remotePath: '/AI-agent/Home-NAS', title: 'x' })
+      expect.unreachable('应当失败')
+    } catch (error) {
+      expect((error as Error).message).toMatch(/SSH 命令通道里找不到.*\/AI-agent\/Home-NAS/)
+    }
+    expect(rt.bindings.list()).toHaveLength(0)
   })
 
   it('远程路径不存在 / 不是目录 / 主机不存在 → 明确报错，不建任何目录', async () => {

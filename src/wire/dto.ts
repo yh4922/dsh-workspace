@@ -154,7 +154,11 @@ export interface MethodIO {
   renameTerminal: [{ id: string; title: string }, TerminalView]
   setTerminalKeepAlive: [{ id: string; keepAlive: boolean }, TerminalView]
   clearRecentTerminals: [Record<string, never>, { ok: true }]
-  sftpHome: [{ hostId: string }, { path: string }]
+  /**
+   * 远程家目录。execPrefix：该主机 SFTP 根在 SSH 命令里的位置（issue #17，如群晖 DSM 的 /volume1）；
+   * 两视角一致或检测不到时省略。
+   */
+  sftpHome: [{ hostId: string }, { path: string; execPrefix?: string }]
   sftpList: [{ hostId: string; path: string }, ListResult]
   sftpRead: [{ hostId: string; path: string }, ReadResult]
   sftpMkdir: [{ hostId: string; parent: string; name: string }, { path: string }]
@@ -172,7 +176,10 @@ export interface MethodIO {
   editorAsset: [{ name: 'monaco.js' | 'editor.worker.js'; index: number }, EditorAssetOutput]
   /** 开关「接管添加工作区」。 */
   setTakeover: [{ enabled: boolean }, PrefsOutput]
-  /** 为远程目录建本地占位目录并登记绑定；返回的 localPath 交给 DSH 创建工作区。 */
+  /**
+   * 为远程目录建本地占位目录并登记绑定；返回的 localPath 交给 DSH 创建工作区。
+   * remotePath 可以是 SFTP 或 SSH 视角（宿主按路径映射归一化为 SFTP 视角存储）。
+   */
   createRemoteWorkspace: [{ hostId: string; remotePath: string; title: string }, { localPath: string; title: string }]
   /** 全部远程工作区（侧边栏据此判断某个会话是不是远程工作区）。 */
   remoteWorkspaces: [Record<string, never>, { workspaces: RemoteWorkspaceView[] }]

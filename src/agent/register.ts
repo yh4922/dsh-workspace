@@ -15,7 +15,8 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { WorkspaceRuntime } from '../runtime.js'
 import type { BindingStore, RemoteBinding } from '../workspace/bindings.js'
-import { isLocalHostPath, pathKey } from '../workspace/bindings.js'
+import { execRootOf, isLocalHostPath, pathKey } from '../workspace/bindings.js'
+import { ensureExecRoot } from '../ssh/path-view.js'
 import { SshAgentBackend, type AgentBackend } from './backend.js'
 import type { PreimageStore } from './preimages.js'
 import {
@@ -71,6 +72,11 @@ export interface AgentToolsDeps {
   preimages: PreimageStore
   /** 测试替身：自定义后端（默认 SSH）。 */
   backendFor?: (binding: RemoteBinding) => AgentBackend
+  /**
+   * 工作区在 exec 视角下的根目录（issue #17）。默认：经路径映射推算 + exec 自检，旧绑定顺带补写 execPath；
+   * 传了 backendFor（测试替身）而没传本项时，直接用绑定登记的 exec 根。
+   */
+  execRootFor?: (binding: RemoteBinding) => Promise<string>
   /** 本机没有内置 bash 时用来定义远程 bash（运行时从宿主取 @deepseek-ai/dsh-tools 的 defineTool）。 */
   defineTool?: (definition: unknown) => unknown
   /**
@@ -171,6 +177,37 @@ export function mountAgentTools(ctx: Context, deps: AgentToolsDeps): () => void 
       return backend
     })
 
+  const execRootFor =
+    deps.execRootFor ??
+    (deps.backendFor !== undefined
+      ? async (binding: RemoteBinding): Promise<string> => execRootOf(binding)
+      : async (binding: RemoteBinding): Promise<string> => {
+          const paths = deps.rt.paths
+          const result = await ensureExecRoot(binding, {
+            view: await paths.view(binding.hostId),
+            probeExecDir: (p) => paths.probeDir(binding.hostId, p),
+            persist: (execPath) => {
+              deps.bindings.setExecPath(binding.localPath, execPath)
+              deps.rt.log.info(binding.hostId, 'agent', `远程工作区 ${binding.remotePath} 的 SSH 命令路径登记为 ${execPath}`)
+            }
+          })
+          if (!result.ok) {
+            // 自检失败不阻断会话：read / write 走 SFTP 仍可用，bash / glob / grep 报错时附带说明（workdirMissingHint）。
+            deps.rt.log.warn(
+              binding.hostId,
+              'agent',
+              `自检：远程工作区 ${binding.remotePath} 在 SSH 命令通道里不存在（${result.execPath}）。该主机的 SFTP 根可能与 SSH 根不同，bash / glob / grep / git 将无法在工作区内执行。`
+            )
+          }
+          return result.execPath
+        })
+
+  /** 远程路径换回 SFTP 视角（交给侧栏打开的路径；侧栏文件浏览走 SFTP）。 */
+  const clientPath =
+    deps.backendFor !== undefined
+      ? undefined
+      : async (binding: RemoteBinding, execPath: string): Promise<string> => (await deps.rt.paths.view(binding.hostId)).toSftp(execPath) ?? execPath
+
   const sandboxMode = async (exec: ToolExec): Promise<string | undefined> => {
     const policy = c.get('sandboxPolicy') as { resolve(input: object): unknown } | undefined
     if (policy === undefined || exec.agent === undefined) return undefined
@@ -202,8 +239,13 @@ export function mountAgentTools(ctx: Context, deps: AgentToolsDeps): () => void 
   /** 每个 Agent 的 open_in_sidebar 清理函数（撤销偏好订阅与注册）。 */
   const openOffs = new Map<AgentLike, () => void>()
   const openDeps: OpenToolDeps = {
-    resolveBinding: (cwd) => deps.bindings.resolve(cwd),
-    remoteStat: (binding, p) => backendFor(binding).stat(p)
+    // 模型给的路径是 exec 视角：相对路径按 exec 根解析，交给侧栏前再换回 SFTP 视角。
+    resolveBinding: (cwd) => {
+      const b = deps.bindings.resolve(cwd)
+      return b === undefined ? undefined : { ...b, remotePath: execRootOf(b) }
+    },
+    remoteStat: (binding, p) => backendFor(binding).stat(p),
+    ...(clientPath !== undefined ? { clientPath } : {})
   }
 
   /**
@@ -374,7 +416,28 @@ export function mountAgentTools(ctx: Context, deps: AgentToolsDeps): () => void 
       if (binding === undefined) return
       const tools = scoped.tools
       const caps: ReadCaps = { limit: readLimitOf(tools.get('read', agent)), maxLineLength: 2000, maxBytes: 50 * 1024 }
-      const env = envFor(binding, caps)
+      /**
+       * 工具看到的绑定是 exec 视角（issue #17）：模型、bash、glob / grep 只用一种写法，
+       * 文件读写由后端换回 SFTP 视角。exec 根要连上主机才能确定（inject 回调必须同步），
+       * 所以先用登记值，探测完成后原地更新 —— env 与 present 持有的是同一个对象。
+       */
+      const view: RemoteBinding = { ...binding, remotePath: execRootOf(binding) }
+      const env = envFor(view, caps)
+      let rooting: Promise<void> | undefined
+      /** 每次工具执行前等 exec 根确定；失败（主机离线等）不阻断，下次调用再试。 */
+      const ensureRoot = (): Promise<void> => {
+        rooting ??= execRootFor(binding).then(
+          (root) => {
+            view.remotePath = root
+          },
+          (error: unknown) => {
+            rooting = undefined
+            deps.rt.log.warn(binding.hostId, 'agent', `确定远程工作区的 SSH 命令路径失败，暂按登记路径执行：${error instanceof Error ? error.message : String(error)}`)
+          }
+        )
+        return rooting
+      }
+      void ensureRoot()
       /**
        * 必须按「该 Agent 的视图」查内置工具：DSH 0.1.7 起内置工具注册在 preset 作用域（Agent 的祖先），
        * 不在全局层，tools.get(name) 不带作用域查不到 —— 曾因此一个工具也没接管，Agent 的 write 写到了本机。
@@ -398,6 +461,7 @@ export function mountAgentTools(ctx: Context, deps: AgentToolsDeps): () => void 
           ...builtin,
           execute: async (args: unknown, exec: unknown) => {
             guard(binding, exec as ToolExec)
+            await ensureRoot()
             return await run(args as never, exec as ToolExec)
           }
         })
@@ -428,6 +492,7 @@ export function mountAgentTools(ctx: Context, deps: AgentToolsDeps): () => void 
               deps.rt.log.info(binding.hostId, 'agent', `本机文件分支（allowLocalFiles）：${name} ${p}（${agent.session.id ?? '?'}）`)
               return await builtin.execute(args, exec)
             }
+            await ensureRoot()
             return await run(args as never, exec as ToolExec)
           }
         })
@@ -445,7 +510,14 @@ export function mountAgentTools(ctx: Context, deps: AgentToolsDeps): () => void 
         const keepCwd = bashOutputAcceptsCwd(builtinOf('bash'))
         if (wrap('bash', async (args, exec) => adaptBashValue(await remoteBash(env, args, exec), keepCwd))) return true
         if (deps.defineTool === undefined) return false
-        tools.register(deps.defineTool(remoteBashDefinition(binding, env, guard)))
+        tools.register(
+          deps.defineTool(
+            remoteBashDefinition(binding, env, (b, e) => {
+              guard(b, e)
+              return ensureRoot()
+            })
+          )
+        )
         return true
       })
       // 本机 shell：按主机配置隐藏 / 保留，配置变化即时同步（见 mountLocalShells）。
@@ -469,7 +541,14 @@ export function mountAgentTools(ctx: Context, deps: AgentToolsDeps): () => void 
           attachments: () => c.get('attachments') as AttachmentService | undefined,
           audit: (level, message) => deps.rt.log[level](binding.hostId, 'agent', message)
         }
-        tools.register(deps.defineTool(uploadToolDefinition(env, uploadDeps, (exec) => guard(binding, exec))))
+        tools.register(
+          deps.defineTool(
+            uploadToolDefinition(env, uploadDeps, (exec) => {
+              guard(binding, exec)
+              return ensureRoot()
+            })
+          )
+        )
         return true
       })
       // present：远程路径在宿主那里按本机文件系统校验必然失败。包装宿主定义（描述、render、卡片不变），
@@ -479,7 +558,7 @@ export function mountAgentTools(ctx: Context, deps: AgentToolsDeps): () => void 
         const projections = c.get('sessionProjections') as TurnBoundarySource | undefined
         if (builtin === undefined || typeof projections?.stateOf !== 'function' || typeof scoped.on !== 'function') return false
         const present = createRemotePresent({
-          binding,
+          binding: view,
           backend: env.backend,
           projections,
           builtinExecute: (args, exec) => builtin.execute(args, exec)
@@ -493,6 +572,7 @@ export function mountAgentTools(ctx: Context, deps: AgentToolsDeps): () => void 
           ...builtin,
           execute: async (args: unknown, exec: unknown) => {
             guard(binding, exec as ToolExec)
+            await ensureRoot()
             return await present.execute(args, exec as PresentExec)
           }
         })
@@ -585,6 +665,8 @@ function safeKeepLocalFiles(deps: AgentToolsDeps, hostId: string): boolean {
  */
 export function remotePromptText(binding: RemoteBinding | undefined, hostLabel: string, keepLocalShell = false, keepLocalFiles = false): string {
   if (binding === undefined) return ''
+  // 模型只用 exec 视角的写法（bash 与文件工具一致，issue #17）；旧绑定首次接管前尚未补写时退回 remotePath。
+  const root = execRootOf(binding)
   const localShell = keepLocalShell
     ? [
         // 写成「如果有」：调用方在拿不到会话实际状态时按主机配置判断，此时本机可能根本没有这些 shell（如 macOS / Linux）。
@@ -598,9 +680,9 @@ export function remotePromptText(binding: RemoteBinding | undefined, hostLabel: 
     ? 'The read, write, edit, glob and grep tools operate on that remote host by default: use POSIX paths (absolute or relative to the workspace root). A Windows absolute path such as C:\\... or \\\\server\\share points to THIS computer and is read / written locally — use it only when the user explicitly asks about files on this computer, and never mix local and remote paths in one call. bash always runs on that remote host; it is unaffected by this rule.'
     : 'The read, write, edit, glob, grep and bash tools operate on that remote host, not on this computer.'
   return [
-    `This session's workspace is a remote SSH workspace on ${hostLabel}, rooted at ${binding.remotePath}.`,
+    `This session's workspace is a remote SSH workspace on ${hostLabel}, rooted at ${root}.`,
     fileTools,
-    `Use POSIX paths: absolute (e.g. ${binding.remotePath.replace(/\/+$/, '')}/src/main.ts) or relative to the workspace root.`,
+    `Use POSIX paths: absolute (e.g. ${root.replace(/\/+$/, '')}/src/main.ts) or relative to the workspace root.`,
     `The local directory ${binding.localPath} is only a placeholder that binds this session to the remote host; do not put project files there.`,
     'bash runs `bash -lc` on the remote host in a fresh shell each call (pass workdir instead of cd). run_in_background is unavailable; for long-running processes use `nohup <cmd> > /tmp/<name>.log 2>&1 &` and read the log.',
     'present accepts remote paths (absolute or relative to the workspace root); the delivery card opens a preview of the remote file in the sidebar. Files on this computer can still be presented, but not mixed with remote files in one call.',
@@ -611,7 +693,7 @@ export function remotePromptText(binding: RemoteBinding | undefined, hostLabel: 
 }
 
 /** 本机没有内置 bash（Windows 上只有 pwsh）时的远程 bash 定义，契约与内置 bash 的前台结果一致。 */
-function remoteBashDefinition(binding: RemoteBinding, env: RemoteToolEnv, guard: (b: RemoteBinding, e: ToolExec) => void): unknown {
+function remoteBashDefinition(binding: RemoteBinding, env: RemoteToolEnv, guard: (b: RemoteBinding, e: ToolExec) => void | Promise<void>): unknown {
   return {
     name: 'bash',
     description:
@@ -656,7 +738,7 @@ function remoteBashDefinition(binding: RemoteBinding, env: RemoteToolEnv, guard:
       render: (_args: unknown, value: BashValue) => [{ type: 'text', text: renderBash(value) }]
     },
     async execute(args: unknown, exec: unknown) {
-      guard(binding, exec as ToolExec)
+      await guard(binding, exec as ToolExec)
       return await remoteBash(env, args as never, exec as ToolExec)
     },
     presentCall(args: { command?: string; description?: string }) {

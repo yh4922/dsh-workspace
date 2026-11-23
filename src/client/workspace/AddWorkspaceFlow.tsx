@@ -187,6 +187,8 @@ type RemotePhase = { hostId: string; phase: 'connecting' | 'ready' | 'error' }
  */
 const homeInflight = new Map<string, Promise<string>>()
 const homeKnown = new Map<string, string>()
+/** 主机 SFTP 根在 SSH 里的位置（issue #17，如群晖 DSM 的 /volume1）；两视角一致时为 ''。随 sftpHome 一并取回。 */
+const prefixKnown = new Map<string, string>()
 
 function remoteHome(api: AddWorkspaceFlowProps['api'], hostId: string): Promise<string> {
   const known = homeKnown.get(hostId)
@@ -197,6 +199,7 @@ function remoteHome(api: AddWorkspaceFlowProps['api'], hostId: string): Promise<
       .call('sftpHome', { hostId })
       .then((r) => {
         homeKnown.set(hostId, r.path)
+        prefixKnown.set(hostId, r.execPrefix ?? '')
         return r.path
       })
       .finally(() => homeInflight.delete(hostId))
@@ -212,6 +215,11 @@ export function AddWorkspaceFlow(props: AddWorkspaceFlowProps) {
   /** 浏览器的起点与重建序号：点左侧位置时换起点并重建浏览器。 */
   const [start, setStart] = useState<{ path: string | undefined; seq: number }>({ path: undefined, seq: 0 })
   const [path, setPath] = useState<string | undefined>(undefined)
+  /**
+   * 手动输入的远程绝对路径（只对远程主机生效）：浏览器走 SFTP，SFTP 被限制在子目录里的主机
+   * （issue #17）上用户可能只知道 SSH 里的写法；两种写法都交给宿主归一化。
+   */
+  const [manualPath, setManualPath] = useState('')
   const [title, setTitle] = useState('')
   const [titleTouched, setTitleTouched] = useState(false)
   const [hosts, setHosts] = useState<HostView[]>([])
@@ -277,6 +285,7 @@ export function AddWorkspaceFlow(props: AddWorkspaceFlowProps) {
     }
     setError(null)
     setPath(undefined)
+    setManualPath('')
     setTitle('')
     setTitleTouched(false)
     setMkdirRequest(0)
@@ -351,6 +360,7 @@ export function AddWorkspaceFlow(props: AddWorkspaceFlowProps) {
     )
     setStart((s) => ({ path: startPath, seq: s.seq + 1 }))
     setPath(undefined)
+    setManualPath('')
     if (!titleTouched) setTitle('')
     setError(null)
   }
@@ -472,19 +482,30 @@ export function AddWorkspaceFlow(props: AddWorkspaceFlowProps) {
     }
   }
 
+  /** 要添加的目录：远程主机上手动输入了路径时以它为准，否则取浏览器里选中的目录。 */
+  const chosenPath = (): string | undefined => {
+    const manual = source.kind === 'remote' ? manualPath.trim() : ''
+    return manual !== '' ? manual : path
+  }
+
   /**
    * 创建：远程先让宿主建占位目录；然后自己 create + rename（按用户填的名称）；最后交给宿主。
    * 改名失败（名称已被别的工作区占用）不阻断创建：保留目录名作为标题并提示。
    */
   const submit = async (): Promise<void> => {
-    if (path === undefined || working) return
+    const target = chosenPath()
+    if (target === undefined || working) return
+    if (source.kind === 'remote' && !target.startsWith('/')) {
+      setError(t('add.manualPathInvalid'))
+      return
+    }
     const wanted = title.trim()
     setWorking(true)
     setError(null)
     try {
-      let localPath = path
+      let localPath = target
       if (source.kind === 'remote') {
-        localPath = (await api.call('createRemoteWorkspace', { hostId: source.hostId, remotePath: path, title: wanted || lastSegment(path) || 'root' })).localPath
+        localPath = (await api.call('createRemoteWorkspace', { hostId: source.hostId, remotePath: target, title: wanted || lastSegment(target) || 'root' })).localPath
       }
       const controller = props.workspaces()
       if (controller !== undefined && wanted !== '') {
@@ -509,6 +530,8 @@ export function AddWorkspaceFlow(props: AddWorkspaceFlowProps) {
   const remoteLocked = source.kind === 'remote' && locked
   const backend = source.kind === 'local' ? localBackend : remoteBackend
   const hasNative = nativePicker(ui) !== undefined
+  // 列出过家目录后才知道；两视角一致（绝大多数主机）时为 '' 不提示。
+  const execPrefix = source.kind === 'remote' ? prefixKnown.get(source.hostId) : undefined
 
   const renderBrowser = (): ReactNode => {
     if (source.kind === 'local') {
@@ -659,7 +682,7 @@ export function AddWorkspaceFlow(props: AddWorkspaceFlowProps) {
             <Button variant="outline" onClick={() => report('cancel')} disabled={busy}>
               {t('form.cancel')}
             </Button>
-            <Button variant="primary" onClick={() => void submit()} disabled={busy || path === undefined || remoteLocked}>
+            <Button variant="primary" onClick={() => void submit()} disabled={busy || chosenPath() === undefined || remoteLocked}>
               {busy ? t('add.creating') : t('add.create')}
             </Button>
           </div>
@@ -736,8 +759,26 @@ export function AddWorkspaceFlow(props: AddWorkspaceFlowProps) {
             }}
           />
         </label>
-        <div className="dshws-add-selected dshws-mono" title={path}>
-          {path === undefined ? t('add.noneSelected') : `${selectedHost !== undefined ? `${selectedHost.label}:` : ''}${path}`}
+        {source.kind === 'remote' && !remoteLocked ? (
+          <label className="dshws-add-row">
+            <span>{t('add.manualPath')}</span>
+            <input
+              className="dshws-input dshws-mono"
+              value={manualPath}
+              maxLength={4096}
+              spellCheck={false}
+              placeholder={t('add.manualPathPlaceholder')}
+              onChange={(e) => {
+                setManualPath(e.target.value)
+                const p = e.target.value.trim()
+                if (!titleTouched) setTitle(p !== '' ? lastSegment(p) || p : path !== undefined ? lastSegment(path) || path : '')
+              }}
+            />
+          </label>
+        ) : null}
+        {execPrefix !== undefined && execPrefix !== '' ? <div className="dshws-pk-rail-note">{t('add.pathMapping', { prefix: execPrefix })}</div> : null}
+        <div className="dshws-add-selected dshws-mono" title={chosenPath()}>
+          {chosenPath() === undefined ? t('add.noneSelected') : `${selectedHost !== undefined ? `${selectedHost.label}:` : ''}${chosenPath() ?? ''}`}
         </div>
         {error !== null ? <div className="dshws-form-error">{error}</div> : null}
       </div>

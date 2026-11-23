@@ -420,9 +420,24 @@ async function searchRoot(env: RemoteToolEnv, input: string | undefined, verb: s
   return { root, info }
 }
 
-function assertSearchFinished(run: RunResult, verb: string): void {
+/** 后端 run() 在 cd 失败时的固定报错前缀（见 backend.ts）。 */
+const WORKDIR_MISSING = 'workdir not found: '
+
+/**
+ * 命令目录在 exec 里不存在时给模型的说明。issue #17：SFTP 能看到的目录，SSH 命令里可能换了写法
+ * （群晖 DSM 的 SFTP 把 /volume1 当作 /），只报 workdir not found 模型无从下手。
+ */
+export function workdirMissingHint(run: RunResult, cwd: string): string | undefined {
+  if (run.code !== 1 || !run.stderr.startsWith(WORKDIR_MISSING)) return undefined
+  return `working directory "${cwd}" does not exist for SSH commands on this host. If the file tools can still see it, the host's SFTP root differs from its shell root (e.g. Synology DSM maps /volume1 to the SFTP /); ask the user to re-add the remote workspace.`
+}
+
+function assertSearchFinished(run: RunResult, verb: string, cwd: string): void {
   if (run.aborted) throw new Error(`${verb} aborted`)
   if (run.timedOut) throw new Error(`${verb} timed out after ${SEARCH_TIMEOUT_MS}ms; narrow the pattern or path`)
+  // 否则 find / grep 的空输出会被当成「没有匹配」，静默返回空结果。
+  const missing = workdirMissingHint(run, cwd)
+  if (missing !== undefined) throw new RemoteFsError(`cannot search: ${missing}`, 'FS_NOT_FOUND')
 }
 
 export async function remoteGlob(env: RemoteToolEnv, args: GlobArgs, exec: ToolExec): Promise<GlobValue> {
@@ -436,7 +451,7 @@ export async function remoteGlob(env: RemoteToolEnv, args: GlobArgs, exec: ToolE
     ? `find ${sq(root)} ${prune} -printf '%T@\\t%p\\n' 2>/dev/null`
     : `find ${sq(root)} ${prune} -print 2>/dev/null`
   const run = await env.backend.run(command, { cwd: root, timeoutMs: SEARCH_TIMEOUT_MS, maxBytes: SEARCH_MAX_BYTES, signal: exec.signal })
-  assertSearchFinished(run, 'glob')
+  assertSearchFinished(run, 'glob', root)
 
   const pattern = args.pattern.replace(/^\.\//, '')
   const matcher = globToRegExp(pattern)
@@ -500,7 +515,7 @@ export async function remoteGrep(env: RemoteToolEnv, args: GrepArgs, exec: ToolE
     command = `grep -rnIZ ${pcre ? '-P' : '-E'} ${excludes}${includes}-e ${sq(args.pattern)} -- ${sq(root)} 2>/dev/null`
   }
   const run = await env.backend.run(command, { cwd: root, timeoutMs: SEARCH_TIMEOUT_MS, maxBytes: SEARCH_MAX_BYTES, signal: exec.signal })
-  assertSearchFinished(run, 'grep')
+  assertSearchFinished(run, 'grep', root)
   // 退出码 1 = 没有匹配；2 = 出错（如正则非法），此时报告 stderr。
   if (run.code === 2 && run.stdout === '') throw new Error(`grep failed: ${run.stderr.trim() || 'invalid pattern'}`)
 
@@ -570,6 +585,7 @@ export async function remoteBash(env: RemoteToolEnv, args: BashArgs, exec: ToolE
   const cwd = args.workdir === undefined ? env.binding.remotePath : resolvePath(env, args.workdir)
   const run = await env.backend.run(args.command, { cwd, timeoutMs, maxBytes: BASH_MAX_OUTPUT_BYTES, signal: exec.signal })
   if (run.aborted) throw new Error('aborted')
+  const missing = workdirMissingHint(run, cwd)
   return {
     kind: 'foreground',
     cwd,
@@ -579,7 +595,7 @@ export async function remoteBash(env: RemoteToolEnv, args: BashArgs, exec: ToolE
     aborted: false,
     timeoutMs,
     stdout: { text: run.stdout, truncated: run.stdoutTruncated },
-    stderr: { text: run.stderr, truncated: run.stderrTruncated }
+    stderr: { text: missing === undefined ? run.stderr : `${run.stderr.replace(/\n?$/, '\n')}${missing}\n`, truncated: run.stderrTruncated }
   }
 }
 

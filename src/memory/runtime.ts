@@ -227,7 +227,8 @@ export class MemoryRuntime {
     let branch: string | undefined
     try {
       const binding = this.rt.bindings.resolve(cwd)
-      if (binding !== undefined) branch = await new RemoteGit(this.rt, binding.hostId, binding.remotePath).currentBranch()
+      // git 跑在 exec 里：用 exec 视角的根（issue #17）。
+      if (binding !== undefined) branch = await new RemoteGit(this.rt, binding.hostId, await this.rt.paths.execRoot(binding)).currentBranch()
       else branch = await new LocalGit(cwd).currentBranch()
     } catch {
       branch = undefined

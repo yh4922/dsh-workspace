@@ -12,6 +12,7 @@ import { TerminalRegistry, type ShellOpener } from './terminal/registry.js'
 import { bytesForLines } from './terminal/scrollback.js'
 import { createSshShellOpener } from './terminal/ssh-shell.js'
 import { RemoteFs } from './sftp/remote-fs.js'
+import { createPathViews, type PathViews } from './ssh/path-view.js'
 import { PrefsStore } from './prefs.js'
 import { BindingStore } from './workspace/bindings.js'
 import { PreimageStore } from './agent/preimages.js'
@@ -53,6 +54,8 @@ export interface WorkspaceRuntime {
   readonly pool: SshPool
   readonly terminals: TerminalRegistry
   readonly files: RemoteFs
+  /** SFTP 视角 ↔ SSH exec 视角的路径映射（issue #17，按主机检测并缓存）。 */
+  readonly paths: PathViews
   /** 本地工作区文件（hostId 形如 local:<sessionId>，根目录按会话 cwd 推导）。 */
   readonly localFiles: LocalFs
   /** 本地会话的工作区范围（根目录 + 同仓库的其他 git 工作目录）。 */
@@ -201,7 +204,7 @@ export function createRuntime(config: RuntimeConfig, overrides: RuntimeOverrides
   })()
   const partial = { config, log, vault, knownHosts, pool, resolveHost, prefs, web, host, updater, bindings, preimages, previews, autoUnlock, autoUnlockReady } as Omit<
     WorkspaceRuntime,
-    'terminals' | 'files' | 'localFiles' | 'localScope' | 'dispose' | 'memory'
+    'terminals' | 'files' | 'paths' | 'localFiles' | 'localScope' | 'dispose' | 'memory'
   >
   const runtime = partial as WorkspaceRuntime
   const terminals = new TerminalRegistry(overrides.shellOpener ?? createSshShellOpener(runtime), log, {
@@ -210,6 +213,7 @@ export function createRuntime(config: RuntimeConfig, overrides: RuntimeOverrides
     ...(overrides.persistTerminals === false ? {} : { recentFile: terminalsFile() })
   })
   const files = new RemoteFs(runtime, () => prefs.get().ignore)
+  const paths = createPathViews(runtime)
 
   /**
    * 本地会话的工作区范围：根目录只由宿主按会话 cwd 推导（浏览器只给会话 id）。
@@ -237,6 +241,7 @@ export function createRuntime(config: RuntimeConfig, overrides: RuntimeOverrides
   Object.assign(runtime, {
     terminals,
     files,
+    paths,
     localFiles,
     localScope,
     memory,

@@ -76,6 +76,11 @@ export interface OpenToolDeps {
   resolveBinding(cwd: string | undefined): RemoteBinding | undefined
   /** 远程 stat（跟随符号链接）；不存在返回 undefined。 */
   remoteStat(binding: RemoteBinding, remotePath: string): Promise<RemoteStat | undefined>
+  /**
+   * 远程路径 → 侧栏（SFTP 文件浏览）使用的写法。模型给的是 SSH exec 视角，SFTP 根不同的主机
+   * （issue #17，群晖 DSM）上两者不一致；不传时原样交给侧栏。
+   */
+  clientPath?: (binding: RemoteBinding, remotePath: string) => Promise<string>
   /** 本机 stat 替身（测试用）。 */
   localStat?: (p: string) => Promise<{ isDirectory(): boolean }>
   /** 平台替身（测试用）。 */
@@ -106,7 +111,7 @@ export async function executeOpen(deps: OpenToolDeps, args: { target: string; ti
     const info = await deps.remoteStat(binding as RemoteBinding, plan.remotePath)
     if (info === undefined) throw new Error(`"${args.target}" does not exist on the remote host (resolved to "${plan.remotePath}")`)
     kind = info.type === 'dir' ? 'folder' : 'file'
-    target = plan.remotePath
+    target = deps.clientPath === undefined ? plan.remotePath : await deps.clientPath(binding as RemoteBinding, plan.remotePath)
   } else {
     let info: { isDirectory(): boolean }
     try {

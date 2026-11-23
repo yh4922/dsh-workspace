@@ -191,7 +191,7 @@ export function renderUpload(value: UploadValue): string {
 }
 
 /** 工具定义（交给宿主 defineTool）。 */
-export function uploadToolDefinition(env: RemoteToolEnv, deps: UploadDeps, guard: (exec: ToolExec) => void): unknown {
+export function uploadToolDefinition(env: RemoteToolEnv, deps: UploadDeps, guard: (exec: ToolExec) => void | Promise<void>): unknown {
   const limitMb = Math.round((deps.maxBytes ?? UPLOAD_MAX_BYTES) / 1024 / 1024)
   return {
     name: UPLOAD_TOOL_NAME,
@@ -225,7 +225,7 @@ export function uploadToolDefinition(env: RemoteToolEnv, deps: UploadDeps, guard
       render: (_args: unknown, value: UploadValue) => [{ type: 'text', text: renderUpload(value) }]
     },
     async execute(args: unknown, exec: unknown) {
-      guard(exec as ToolExec)
+      await guard(exec as ToolExec)
       return await remoteUpload(env, deps, args as UploadArgs, exec as ToolExec)
     },
     presentCall(args: { attachment_id?: string; target_path?: string }) {

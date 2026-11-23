@@ -5,6 +5,7 @@
  * @FilePath: /dsh-workspace/src/client/tabs/register.ts
  *
  * 等 sidebarRight 服务出现再启动（宿主先声明插槽、后提供服务）；服务重建时随子作用域撤下并重挂。
+ * 菜单项优先注册到宿主 contextMenus 服务（0.2.2+，由宿主 Menu 渲染）；没有该服务的旧宿主才用 sidebar.right.tab.menu.item 插槽自绘。
  * 宿主会吞掉插槽注册回调里的异常（只表现成「菜单项静默不出现」），所以注册逐层 try/catch，并在注册后自检条目是否真的进了插槽。
  * 关闭开关时：撤销菜单注册、移除隐藏关闭按钮的 CSS、停止补开 / 排序；固定记录保留在 localStorage，重新打开后继续生效。
  */
@@ -13,8 +14,19 @@ import type { SlotsPeek } from '../workspace/bridge-compat.js'
 import { getSidebarPrefs, subscribeSidebarPrefs } from '../sidebar-prefs.js'
 import type { SidebarRightLike } from './host-layout.js'
 import { createPinManager } from './pin-manager.js'
-import { TabMenuItems, type MenuDeps } from './menu.js'
+import { TabMenuItems, buildMenuItems, toHostActions, type HostMenuAction, type MenuDeps } from './menu.js'
 import type { StorageLike } from './pins.js'
+import type { TabRecordLike } from './host-layout.js'
+
+/** 宿主 contextMenus 服务里本插件用到的部分（sidebar-right 的 tab target 值为 { sessionId, paneId, tab }）。 */
+interface ContextMenusLike {
+  register?(input: {
+    id: string
+    target: string
+    order: number
+    resolve(target: { sessionId?: string; paneId?: string; tab?: TabRecordLike } | undefined): HostMenuAction[]
+  }): () => void
+}
 
 export const TAB_MENU_SLOT = 'sidebar.right.tab.menu.item'
 export const TAB_MENU_ID = 'dshws-tab-enhance'
@@ -56,7 +68,30 @@ function enable(ctx: ClientContext, get: (name: string) => unknown, deps: TabEnh
   const menuDeps: MenuDeps = { t: deps.t, manager, right, isMultiple, index: deps.index, filesKind: deps.filesKind, log }
 
   let offSlot: () => void = () => undefined
-  try {
+  // 新宿主（0.2.2+）：通过 contextMenus 声明动作，由宿主 Menu 渲染，样式与「关闭」等宿主项一致；
+  // 此时不能再注册插槽组件，否则同一批项会以无样式的原生按钮再出现一遍。
+  const menus = get('contextMenus') as ContextMenusLike | undefined
+  if (typeof menus?.register === 'function') {
+    try {
+      offSlot = menus.register({
+        id: TAB_MENU_ID,
+        target: 'tab',
+        order: 200,
+        resolve: (target) => {
+          const { sessionId, tab } = target ?? {}
+          if (typeof sessionId !== 'string' || tab === undefined || typeof tab.id !== 'string') return []
+          try {
+            return toHostActions(buildMenuItems(menuDeps, sessionId, tab), log)
+          } catch (error) {
+            log('生成标签菜单失败', error)
+            return []
+          }
+        }
+      })
+    } catch (error) {
+      log('注册标签右键菜单动作失败', error)
+    }
+  } else try {
     offSlot = ctx.slots.inject(TAB_MENU_SLOT, () => {
       try {
         const off = ctx.slots.register(

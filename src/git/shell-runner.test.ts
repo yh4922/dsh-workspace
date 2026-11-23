@@ -64,5 +64,7 @@ describe.skipIf(SH === undefined)('shellGitRunner（本机 sh 代替 SSH）', ()
     await git.branchCommit('refs/heads/feat', 'add n')
     expect((await git.file('refs/heads/feat', 'n.txt')).text).toBe('hello\n')
     expect((await git.branchChanges('refs/heads/feat')).files).toEqual([])
-  })
+  // Windows 下每次调用都要起 sh + git 子进程，整个用例约起几十个进程：单跑约 3.6s，
+  // 全量并行时 CPU 争用会超过 vitest 默认 5s 而偶发失败（还会卡住发布脚本的测试关卡），故单独放宽上限。
+  }, 30_000)
 })
